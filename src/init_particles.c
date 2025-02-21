@@ -1,6 +1,7 @@
 #define _USE_MATH_DEFINES
 #include <math.h>
-#include "particles.h"
+#include <stdio.h>
+#include "init_particles.h"
 #define G 6.67408e-11
 #define EPSILON2 (0.005*0.005)
 #define DELTAT 0.1
@@ -52,3 +53,54 @@ void init_particles(long seed, double side, long ncside, long long n_part, parti
         par[i].m = rnd01() * 0.01 * (ncside * ncside) / n_part / G * EPSILON2;
     }
 }
+
+int main() {
+    
+    
+    long seed = 1; 
+    double side = 3; 
+    long ncside = 100;
+    long long n_part = 10; 
+    particle_t particles_arr[n_part];
+    int ncells = side*side; 
+    com_t com[ncells];
+
+    init_particles(seed, side, ncside, n_part, particles_arr);
+    particle_cell(particles_arr, n_part);
+
+    for(int i = 0; i < n_part; i++) {
+        printf("Particle %d: X:%f Y:%f M:%f\n", i, particles_arr[i].x, particles_arr[i].y, particles_arr[i].m);
+    }
+    
+    calculate_com(particles_arr, com, n_part);
+
+    for(int i = 0; i < ncells; i++) {
+        printf("COM %d: X:%f Y:%f M:%f\n", i, com[i].x, com[i].y, com[i].m);
+    }   
+
+    return 0;
+}   
+
+void calculate_com(particle_t *par, com_t *com, long long n_part) {
+    int ind;
+    for (long long i = 0; i < n_part; i++) {
+        ind = (par[i].x_cell*3) + (par[i].y_cell);
+        com[ind].x += par[i].x_position;
+        com[ind].y += par[i].y_position;
+        com[ind].m += par[i].m;
+    }
+}
+
+void particle_cell(particle_t *par,long long n_part) {
+    long long i;
+
+    for(i = 0; i < n_part; i++) {
+        
+        par[i].x_cell = (int) par[i].x;
+        par[i].y_cell = (int) par[i].y;
+
+        par[i].x_position = par[i].x - par[i].x_cell;
+        par[i].y_position = par[i].y - par[i].y_cell;
+    }
+}
+
