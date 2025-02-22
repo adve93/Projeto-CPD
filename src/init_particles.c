@@ -1,12 +1,12 @@
 #define _USE_MATH_DEFINES
 #include <math.h>
 #include <stdio.h>
-#include "init_particles.h"
 #define G 6.67408e-11
 #define EPSILON2 (0.005*0.005)
 #define DELTAT 0.1
+#include "init_particles.h"
 
-
+////////////////Professor Function declarations////////
 unsigned int seed;
 void init_r4uni(int input_seed)
 {
@@ -53,54 +53,84 @@ void init_particles(long seed, double side, long ncside, long long n_part, parti
         par[i].m = rnd01() * 0.01 * (ncside * ncside) / n_part / G * EPSILON2;
     }
 }
+///////////////////////////////////////////////////////
+
+////////////////Main Code//////////////////////////////
+
 
 int main() {
     
     
-    long seed = 1; 
-    double side = 3; 
-    long ncside = 100;
-    long long n_part = 10; 
-    particle_t particles_arr[n_part];
-    int ncells = side*side; 
-    com_t com[ncells];
+    long seed = 1;
+    double side = 3; //Side total 
+    long ncside = 3; //Number of cells per side
+    long long n_part = 10; //Number of particles
+    particle_t particles_arr[n_part]; //Array of particles initizalized by teacher's function
+    const double cell_side = side / ncside; //Side of each cell
+    com_t com[ncside*ncside]; //1D flattened Array of center of mass of each cell
 
-    init_particles(seed, side, ncside, n_part, particles_arr);
-    particle_cell(particles_arr, n_part);
+    init_particles(seed, side, ncside, n_part, particles_arr); //Initialize particles
 
-    for(int i = 0; i < n_part; i++) {
-        printf("Particle %d: X:%f Y:%f M:%f\n", i, particles_arr[i].x, particles_arr[i].y, particles_arr[i].m);
-    }
+    particle_cell(particles_arr, n_part, cell_side); //Calculate cell of each particle
     
-    calculate_com(particles_arr, com, n_part);
-
-    for(int i = 0; i < ncells; i++) {
-        printf("COM %d: X:%f Y:%f M:%f\n", i, com[i].x, com[i].y, com[i].m);
-    }   
+    calculate_com(particles_arr, com, n_part, ncside); //Calculate center of mass of each cell
+    
+    print_com(com, ncside);
 
     return 0;
 }   
 
-void calculate_com(particle_t *par, com_t *com, long long n_part) {
-    int ind;
+//Function to run at the beginning of every time step to calculate center of mass of each cell
+void calculate_com(particle_t *par, com_t *com, long long n_part, long ncside) {
+    int cell_index;
+
+    // Reset center of mass data for each cell
+    for (long i = 0; i < ncside * ncside; i++) {
+        com[i].x = 0;
+        com[i].y = 0;
+        com[i].m = 0;
+    }
+
+    // Accumulate mass and weighted positions
     for (long long i = 0; i < n_part; i++) {
-        ind = (par[i].x_cell*3) + (par[i].y_cell);
-        com[ind].x += par[i].x_position;
-        com[ind].y += par[i].y_position;
-        com[ind].m += par[i].m;
+        cell_index = par[i].y_cell * ncside + par[i].x_cell; // Flatten 2D index to 1D array
+
+        com[cell_index].x += par[i].x * par[i].m;
+        com[cell_index].y += par[i].y * par[i].m;
+        com[cell_index].m += par[i].m;
+    }
+
+    // Compute center of mass for each cell
+    for (long i = 0; i < ncside * ncside; i++) {
+        if (com[i].m > 0) { // If that cell has particles
+            com[i].x /= com[i].m;
+            com[i].y /= com[i].m;
+        }
     }
 }
 
-void particle_cell(particle_t *par,long long n_part) {
+void particle_cell(particle_t *par,long long n_part, double cell_size) {
     long long i;
 
     for(i = 0; i < n_part; i++) {
         
-        par[i].x_cell = (int) par[i].x;
-        par[i].y_cell = (int) par[i].y;
+        par[i].x_cell = (int) (par[i].x/cell_size);
+        par[i].y_cell = (int) (par[i].y/cell_size);
 
-        par[i].x_position = par[i].x - par[i].x_cell;
-        par[i].y_position = par[i].y - par[i].y_cell;
+    }
+}
+
+//Test function to print center of mass of each cell
+void print_com(com_t *com, long ncside) {
+    for(long i = 0; i < ncside * ncside; i++) {
+        printf("COM %d: X:%f Y:%f M:%f\n", i, com[i].x, com[i].y, com[i].m);
+    }
+}
+
+//Test function to print particle data
+void print_particles(particle_t *par, long long n_part) {
+    for(long long i = 0; i < n_part; i++) {
+        printf("Particle %d: X:%f Y:%f VX:%f VY:%f M:%f X_CELL:%d Y_CELL:%d\n", i, par[i].x, par[i].y, par[i].vx, par[i].vy, par[i].m, par[i].x_cell, par[i].y_cell);
     }
 }
 
