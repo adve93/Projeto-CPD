@@ -21,9 +21,9 @@ typedef struct  {
 
 void init_particles(long seed, double side, long ncside, long long n_part, particle_t *par);
 void calculate_com(particle_t *par, com_t *com, long long n_part, long ncside);
-void info_particle(particle_t *par);
 void particle_cell(particle_t *par, long long n_part, double cell_size);
 void print_com(com_t *com, long ncside);
 void print_particles(particle_t *par, long long n_part);
+void update_velocities(particle_t *par, com_t *com, long long n_part, long ncside, double side);
 
 #endif

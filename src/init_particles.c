@@ -75,7 +75,16 @@ int main() {
     
     calculate_com(particles_arr, com, n_part, ncside); //Calculate center of mass of each cell
     
-    print_com(com, ncside);
+    for(long long i = 0; i < n_part; i++) {
+        printf("Particle %d: VX:%f VY:%f \n", i, particles_arr[i].vx, particles_arr[i].vy);
+    }
+    printf("///////////////////////////////////////////\n");
+
+    update_velocities(particles_arr, com, n_part, ncside, side); //Update velocities of each particle
+    
+    for(long long i = 0; i < n_part; i++) {
+        printf("Particle %d: VX:%f VY:%f \n", i, particles_arr[i].vx, particles_arr[i].vy);
+    }
 
     return 0;
 }   
@@ -84,25 +93,25 @@ int main() {
 void calculate_com(particle_t *par, com_t *com, long long n_part, long ncside) {
     int cell_index;
 
-    // Reset center of mass data for each cell
+    //Reset center of mass data for each cell
     for (long i = 0; i < ncside * ncside; i++) {
         com[i].x = 0;
         com[i].y = 0;
         com[i].m = 0;
     }
 
-    // Accumulate mass and weighted positions
+    //Accumulate mass and weighted positions
     for (long long i = 0; i < n_part; i++) {
-        cell_index = par[i].y_cell * ncside + par[i].x_cell; // Flatten 2D index to 1D array
+        cell_index = par[i].y_cell * ncside + par[i].x_cell; //Flatten 2D index to 1D array
 
         com[cell_index].x += par[i].x * par[i].m;
         com[cell_index].y += par[i].y * par[i].m;
         com[cell_index].m += par[i].m;
     }
 
-    // Compute center of mass for each cell
+    //Compute center of mass for each cell
     for (long i = 0; i < ncside * ncside; i++) {
-        if (com[i].m > 0) { // If that cell has particles
+        if (com[i].m > 0) { //If that cell has particles
             com[i].x /= com[i].m;
             com[i].y /= com[i].m;
         }
@@ -120,6 +129,62 @@ void particle_cell(particle_t *par,long long n_part, double cell_size) {
     }
 }
 
+//Function to run at the beginning of every time step to calculate new velocity of each particle
+void update_velocities(particle_t *par, com_t *com, long long n_part, long ncside, double side) {
+    for (long long i = 0; i < n_part; i++) {
+        double fx = 0, fy = 0;
+        int x_cell = par[i].x_cell;
+        int y_cell = par[i].y_cell;
+
+        //Particles in the same cell
+        for (long long j = 0; j < n_part; j++) {
+            if (i == j) continue; // Skip self
+
+
+            if (par[j].x_cell == x_cell && par[j].y_cell == y_cell) { //If particles are in the same cell
+                double dx = par[j].x - par[i].x;
+                double dy = par[j].y - par[i].y;
+                double dist2 = dx * dx + dy * dy + EPSILON2; //EPSILON2 to avoid math errors
+                double force = (G * par[i].m * par[j].m) / dist2;
+                double r = sqrt(dist2);
+                fx += force * (dx / r);
+                fy += force * (dy / r);
+            }
+        }
+        
+        //Surrounding centers of mass, with wrap around using a toroidal grid
+        
+        for (int dx = -1; dx <= 1; dx++) { //Loop thorugh surrounding cells in x
+            for (int dy = -1; dy <= 1; dy++) { //Loop thorugh surrounding cells in y
+                int nx = (x_cell + dx + ncside) % ncside; //Wrap around X (By adding ncside and taking modulo we can handle negative values)
+                int ny = (y_cell + dy + ncside) % ncside; //Wrap around Y
+                int cell_index = ny * ncside + nx;
+
+                if (com[cell_index].m == 0) continue; //Ignore empty cells
+
+                double dx_cm = com[cell_index].x - par[i].x;
+                double dy_cm = com[cell_index].y - par[i].y;
+
+                //Handle shortest distance in toroidal space, to handle paths across the edge of the grid
+                if (dx_cm > side / 2) dx_cm -= side;
+                if (dx_cm < -side / 2) dx_cm += side;
+                if (dy_cm > side / 2) dy_cm -= side;
+                if (dy_cm < -side / 2) dy_cm += side;
+
+                double dist2_cm = dx_cm * dx_cm + dy_cm * dy_cm + EPSILON2;
+                double force_cm = (G * par[i].m * com[cell_index].m) / dist2_cm;
+                double r_cm = sqrt(dist2_cm);
+                fx += force_cm * (dx_cm / r_cm);
+                fy += force_cm * (dy_cm / r_cm);
+            }
+        }
+
+        // Update velocity
+        par[i].vx += (fx / par[i].m) * DELTAT;
+        par[i].vy += (fy / par[i].m) * DELTAT;
+    }
+}
+
 //Test function to print center of mass of each cell
 void print_com(com_t *com, long ncside) {
     for(long i = 0; i < ncside * ncside; i++) {
@@ -133,4 +198,6 @@ void print_particles(particle_t *par, long long n_part) {
         printf("Particle %d: X:%f Y:%f VX:%f VY:%f M:%f X_CELL:%d Y_CELL:%d\n", i, par[i].x, par[i].y, par[i].vx, par[i].vy, par[i].m, par[i].x_cell, par[i].y_cell);
     }
 }
+
+
 
