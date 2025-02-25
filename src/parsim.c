@@ -7,6 +7,7 @@
 #define G 6.67408e-11
 #define EPSILON2 (0.005*0.005)
 #define DELTAT 0.1
+#define M_PI 3.14159265358979323846
 
 ///////////////////////////////////////Professor Function declarations////////////////////////////////////////
 unsigned int seed;
@@ -53,6 +54,7 @@ void init_particles(long seed, double side, long ncside, long long n_part, parti
         par[i].vy = (rnd01() - 0.5) * side / ncside / 5.0;
 
         par[i].m = rnd01() * 0.01 * (ncside * ncside) / n_part / G * EPSILON2;
+        par[i].removed = 0;
     }
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -91,6 +93,7 @@ int main(int argc, char *argv[]) {
 
     init_particles(seed, side, ncside, n_part, particles_arr); //Initialize particles
 
+    long long collision_count = 0;
     //Dentro do for de time steps
     for (long long i = 0; i < time_steps; i++) {
         particle_cell(particles_arr, n_part, cell_side); //Calculate cell of each particle
@@ -102,16 +105,20 @@ int main(int argc, char *argv[]) {
 
         update_velocities(particles_arr, n_part); //Update velocities of each particle
 
-        printf("Time step %lld\n", i);
-        // print_particles(particles_arr, n_part);
-        // printf("///////////////////////////////////////////\n");
-        // print_com(com, ncside);
-        // printf("///////////////////////////////////////////\n");
-        // print_forces(particles_arr, n_part);
+        detect_collisions(particles_arr, &n_part, &collision_count); //Detect collisions of each particle
+
+        /* printf("Time step %lld\n", i);
+        print_particles(particles_arr, n_part);
+        printf("///////////////////////////////////////////\n");
+        print_com(com, ncside);
+        printf("///////////////////////////////////////////\n");
+        print_forces(particles_arr, n_part);
+         */
     }
 
     //Print final position of particle 0 up to 3 decimal
     printf("\nParticle 0: %.3f %.3f\n", particles_arr[0].x, particles_arr[0].y);
+    printf("%lld\n", collision_count);
 
     free(particles_arr);
     free(com);
@@ -256,5 +263,43 @@ void print_forces(particle_t *par, long long n_part) {
     }
 }
 
+void detect_collisions(particle_t *par, long long *n_part, long long *collision_count) {
+    long long i, j;
+    
 
+    // Mark particles for removal
+    for (i = 0; i < *n_part; i++) {
+        if (par[i].removed) continue; // Already marked for removal
+
+        for (j = i + 1; j < *n_part; j++) {
+            if (par[j].removed) continue; // Already removed
+
+            double dx = par[j].x - par[i].x;
+            double dy = par[j].y - par[i].y;
+            double dist2 = dx * dx + dy * dy;
+
+            if (dist2 < EPSILON2) {
+                printf("[Collision Detected] P%d and P%d are colliding!\n", i, j);
+
+                // Mark both particles as removed
+                par[i].removed = 1;
+                par[j].removed = 1;
+                (*collision_count)++;
+            }
+        }
+    }
+
+    // Compact array to remove marked particles
+    long long new_n_part = 0;
+    for (i = 0; i < *n_part; i++) {
+        if (!par[i].removed) {
+            par[new_n_part] = par[i];
+            new_n_part++;
+        } else {
+            printf("[Removing Particle] P%d from list\n", i);
+        }
+    }
+    //printf("[Updated Particle Count] New Count: %lld\n", new_n_part);
+    *n_part = new_n_part;
+}
 

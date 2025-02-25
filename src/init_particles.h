@@ -11,6 +11,7 @@ typedef struct  {
     double ax, ay; //Acceleration
     double m; //Mass
     int x_cell, y_cell;
+    int removed;
 } particle_t;
 
 //Center of mass structure
@@ -30,5 +31,6 @@ void update_positions(particle_t *par, long long n_part, double side);
 void print_com(com_t *com, long ncside);
 void print_particles(particle_t *par, long long n_part);
 void print_forces(particle_t *par, long long n_part);
+void detect_collisions(particle_t *par, long long *n_part, long long *collision_count);
 
 #endif
