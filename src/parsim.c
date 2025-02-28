@@ -1,5 +1,6 @@
 #include <math.h>
 #include <stdio.h>
+#include <omp.h>
 #include <stdlib.h>
 #include "init_particles.h"
 
@@ -69,6 +70,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    double exec_time;
     long seed = atol(argv[1]);         // Seed
     double side = atof(argv[2]);       // Simulation domain side length
     long ncside = atol(argv[3]);       // Number of cells per side
@@ -80,7 +82,7 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Memory allocation failed for particles.\n");
         return 1;
     }
-
+//Vtune
     const double cell_side = side / ncside;
 
     com_t *restrict com = (com_t *)malloc(ncside * ncside * sizeof(com_t));
@@ -91,6 +93,7 @@ int main(int argc, char *argv[]) {
     }
 
     init_particles(seed, side, ncside, n_part, particles_arr);
+    exec_time = -omp_get_wtime();
 
     long long collision_count = 0;
     for (long long t = 0; t < time_steps; t++) {
@@ -110,6 +113,8 @@ int main(int argc, char *argv[]) {
 
     printf("\nParticle 0: %.3f %.3f\n", particles_arr[0].x, particles_arr[0].y);
     printf("%lld\n", collision_count);
+    exec_time += omp_get_wtime();
+    fprintf(stderr, "%.1fs\n", exec_time);
 
     free(particles_arr);
     free(com);
@@ -159,7 +164,7 @@ void calculate_forces(particle_t *restrict par, com_t *restrict com, long long n
             if (i == j) continue;
             if (par[j].x_cell == x_cell && par[j].y_cell == y_cell) {
                 double dx = par[j].x - par[i].x;
-                double dy = par[j].y - par[i].y;
+                double dy = par[j].y    - par[i].y;
                 // Apply toroidal wrapping for particles
                 if (dx > half_side) dx -= side;
                 if (dx < -half_side) dx += side;
@@ -242,7 +247,7 @@ void detect_collisions(particle_t *restrict par, long long *n_part, long long *c
     for (i = 0; i < *n_part; i++) {
         if (!par[i].removed) {
             par[new_n_part] = par[i];
-            new_n_part++;
+            new_n_part++;   
         }
     }
     *n_part = new_n_part;
