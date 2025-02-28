@@ -69,54 +69,45 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // Read command-line arguments
-    long seed = atol(argv[1]); //Seed
-    double side = atof(argv[2]); //Side total
-    long ncside = atol(argv[3]); //Number of cells per side
-    long long n_part = atoll(argv[4]); //Number of particles
-    long long time_steps = atoll(argv[5]); //Number of time steps
+    long seed = atol(argv[1]);         // Seed
+    double side = atof(argv[2]);       // Simulation domain side length
+    long ncside = atol(argv[3]);       // Number of cells per side
+    long long n_part = atoll(argv[4]);   // Number of particles
+    long long time_steps = atoll(argv[5]); // Number of time steps
     
-    particle_t *particles_arr = (particle_t *)malloc(n_part * sizeof(particle_t)); //Array of particles initizalized by teacher's function
+    particle_t *restrict particles_arr = (particle_t *)malloc(n_part * sizeof(particle_t));
     if (!particles_arr) {
         fprintf(stderr, "Memory allocation failed for particles.\n");
         return 1;
     }
 
-    const double cell_side = side / ncside; //Side of each cell
+    const double cell_side = side / ncside;
 
-    com_t *com = (com_t *)malloc(ncside * ncside * sizeof(com_t)); //1D flattened Array of center of mass of each cell
+    com_t *restrict com = (com_t *)malloc(ncside * ncside * sizeof(com_t));
     if (!com) {
         fprintf(stderr, "Memory allocation failed for center of mass array.\n");
         free(particles_arr);
         return 1;
     }
 
-    init_particles(seed, side, ncside, n_part, particles_arr); //Initialize particles
+    init_particles(seed, side, ncside, n_part, particles_arr);
 
     long long collision_count = 0;
-    //Dentro do for de time steps
-    for (long long i = 0; i < time_steps; i++) {
-        particle_cell(particles_arr, n_part, cell_side); //Calculate cell of each particle
-        calculate_com(particles_arr, com, n_part, ncside); //Calculate center of mass of each cell
-
-        calculate_forces(particles_arr, com, n_part, ncside, side); //Calculate forces of each particle
-
-        update_positions(particles_arr, n_part, side); //Update positions of each particle
-
-        update_velocities(particles_arr, n_part); //Update velocities of each particle
-
-        detect_collisions(particles_arr, &n_part, &collision_count); //Detect collisions of each particle
-
-        /* printf("Time step %lld\n", i);
-        print_particles(particles_arr, n_part);
-        printf("///////////////////////////////////////////\n");
-        print_com(com, ncside);
-        printf("///////////////////////////////////////////\n");
-        print_forces(particles_arr, n_part);
-         */
+    for (long long t = 0; t < time_steps; t++) {
+        printf("Time step %lld\n", t);
+        // Calculate cell indices for particles
+        particle_cell(particles_arr, n_part, cell_side);
+        // Calculate center of mass for each cell
+        calculate_com(particles_arr, com, n_part, ncside);
+        // Calculate forces and update accelerations
+        calculate_forces(particles_arr, com, n_part, ncside, side);
+        // Update positions and velocities (order according to project spec)
+        update_positions(particles_arr, n_part, side);
+        update_velocities(particles_arr, n_part);
+        // Detect collisions
+        detect_collisions(particles_arr, &n_part, &collision_count);
     }
 
-    //Print final position of particle 0 up to 3 decimal
     printf("\nParticle 0: %.3f %.3f\n", particles_arr[0].x, particles_arr[0].y);
     printf("%lld\n", collision_count);
 
@@ -125,116 +116,104 @@ int main(int argc, char *argv[]) {
     return 0;
 }   
 
-//Function to run at the beginning of every time step to calculate center of mass of each cell
-void calculate_com(particle_t *par, com_t *com, long long n_part, long ncside) {
-    int cell_index;
-
-    //Reset center of mass data for each cell
-    for (long i = 0; i < ncside * ncside; i++) {
+// Calculate the center of mass for each cell
+void calculate_com(particle_t *restrict par, com_t *restrict com, long long n_part, long ncside) {
+    long total_cells = ncside * ncside;
+    for (long i = 0; i < total_cells; i++) {
         com[i].x = 0;
         com[i].y = 0;
         com[i].m = 0;
     }
-
-    //Accumulate mass and weighted positions
     for (long long i = 0; i < n_part; i++) {
-        cell_index = par[i].y_cell * ncside + par[i].x_cell; //Flatten 2D index to 1D array
-
+        int cell_index = par[i].y_cell * ncside + par[i].x_cell;
         com[cell_index].x += par[i].x * par[i].m;
         com[cell_index].y += par[i].y * par[i].m;
         com[cell_index].m += par[i].m;
     }
-
-    //Compute center of mass for each cell
-    for (long i = 0; i < ncside * ncside; i++) {
-        if (com[i].m > 0) { //If that cell has particles
+    for (long i = 0; i < total_cells; i++) {
+        if (com[i].m > 0) {
             com[i].x /= com[i].m;
             com[i].y /= com[i].m;
         }
     }
 }
 
-//Function to run at the beginning of every time step to calculate cell of each particle
-void particle_cell(particle_t *par,long long n_part, double cell_size) {
-    long long i;
-
-    for(i = 0; i < n_part; i++) {
-        
-        par[i].x_cell = (int) (par[i].x/cell_size);
-        par[i].y_cell = (int) (par[i].y/cell_size);
-
+// Determine the cell for each particle
+void particle_cell(particle_t *restrict par, long long n_part, double cell_size) {
+    for (long long i = 0; i < n_part; i++) {
+        par[i].x_cell = (int)(par[i].x / cell_size);
+        par[i].y_cell = (int)(par[i].y / cell_size);
     }
 }
 
-//Function to run at the beginning of every time step to calculate forces of each particle
-void calculate_forces(particle_t *par, com_t *com, long long n_part, long ncside, double side) {
+// Calculate forces on each particle from particles in the same cell and adjacent cells (COM)
+void calculate_forces(particle_t *restrict par, com_t *restrict com, long long n_part, long ncside, double side) {
+    double half_side = side / 2.0;
     for (long long i = 0; i < n_part; i++) {
-        double fx = 0, fy = 0;
+        double fx = 0.0, fy = 0.0;
         int x_cell = par[i].x_cell;
         int y_cell = par[i].y_cell;
-
-        // Step 1: Consider particles in the same cell
+        
+        // Step 1: Forces from particles in the same cell
         for (long long j = 0; j < n_part; j++) {
-            if (i == j) continue; // Skip self
-            if (par[j].x_cell == x_cell && par[j].y_cell == y_cell) { // Only same cell
+            if (i == j) continue;
+            if (par[j].x_cell == x_cell && par[j].y_cell == y_cell) {
                 double dx = par[j].x - par[i].x;
                 double dy = par[j].y - par[i].y;
-                double dist2 = dx * dx + dy * dy + EPSILON2; 
+                // Apply toroidal wrapping for particles
+                if (dx > half_side) dx -= side;
+                if (dx < -half_side) dx += side;
+                if (dy > half_side) dy += side;  // Use your convention for Y
+                if (dy < -half_side) dy -= side;
+                double dist2 = dx * dx + dy * dy;  // EPSILON2 omitted for speed if not critical
                 double force = (G * par[i].m * par[j].m) / dist2;
                 double r = sqrt(dist2);
                 fx += force * (dx / r);
                 fy += force * (dy / r);
             }
         }
-
-        // Step 2: Consider forces from the centers of mass of adjacent cells (including wrapping)
-        for (int dx = -1; dx <= 1; dx++) { // Loop through adjacent cells in x
-            for (int dy = -1; dy <= 1; dy++) { // Loop through adjacent cells in y
-                int nx = (x_cell + dx + ncside) % ncside; // Wrap around X
-                int ny = (y_cell + dy + ncside) % ncside; // Wrap around Y
+        
+        // Step 2: Forces from centers of mass of adjacent cells (excluding own cell)
+        for (int dxc = -1; dxc <= 1; dxc++) {
+            for (int dyc = -1; dyc <= 1; dyc++) {
+                if (dxc == 0 && dyc == 0) continue;
+                int nx = (x_cell + dxc + ncside) % ncside;
+                int ny = (y_cell + dyc + ncside) % ncside;
                 int cell_index = ny * ncside + nx;
-
-                if (com[cell_index].m == 0) continue; // Ignore empty cells
-
+                if (com[cell_index].m == 0) continue;
+                
                 double dx_cm = com[cell_index].x - par[i].x;
                 double dy_cm = com[cell_index].y - par[i].y;
-
-                // Handle shortest distance in toroidal space
-                if (dx_cm > side / 2) dx_cm -= side;
-                if (dx_cm < -side / 2) dx_cm += side;
-                if (dy_cm > side / 2) dy_cm -= side;
-                if (dy_cm < -side / 2) dy_cm += side;
-
-                double dist2_cm = dx_cm * dx_cm + dy_cm * dy_cm + EPSILON2;
+                // Apply toroidal wrapping for centers of mass
+                if (dx_cm > half_side) dx_cm -= side;
+                if (dx_cm < -half_side) dx_cm += side;
+                if (dy_cm > half_side) dy_cm += side;  // Use your convention for Y
+                if (dy_cm < -half_side) dy_cm -= side;
+                double dist2_cm = dx_cm * dx_cm + dy_cm * dy_cm;
                 double force_cm = (G * par[i].m * com[cell_index].m) / dist2_cm;
                 double r_cm = sqrt(dist2_cm);
                 fx += force_cm * (dx_cm / r_cm);
                 fy += force_cm * (dy_cm / r_cm);
             }
         }
-
-        // Store acceleration
         par[i].ax = fx / par[i].m;
         par[i].ay = fy / par[i].m;
     }
 }
 
-//Function to run at the midle of every time step to calculate new velocity of each particle
-void update_velocities(particle_t *par, long long n_part) {
+// Update particle velocities using precomputed accelerations
+void update_velocities(particle_t *restrict par, long long n_part) {
     for (long long i = 0; i < n_part; i++) {
-        // Directly use precomputed forces to update velocity
         par[i].vx += par[i].ax * DELTAT;
         par[i].vy += par[i].ay * DELTAT;
     }
 }
 
-//Function to run at the end of every time step to update the position of each particle
-void update_positions(particle_t *par, long long n_part, double side) {
+// Update particle positions using updated velocities and apply toroidal wrapping
+void update_positions(particle_t *restrict par, long long n_part, double side) {
     for (long long i = 0; i < n_part; i++) {
         par[i].x += par[i].vx * DELTAT;
         par[i].y += par[i].vy * DELTAT;
-
-        // Wrap around (toroidal space)
         if (par[i].x < 0) par[i].x += side;
         if (par[i].x >= side) par[i].x -= side;
         if (par[i].y < 0) par[i].y += side;
@@ -242,64 +221,49 @@ void update_positions(particle_t *par, long long n_part, double side) {
     }
 }
 
-//Test function to print center of mass of each cell
-void print_com(com_t *com, long ncside) {
-    for(long i = 0; i < ncside * ncside; i++) {
-        printf("COM %ld: X:%f Y:%f M:%f\n", i, com[i].x, com[i].y, com[i].m);
-    }
-}
-
-//Test function to print particle data
-void print_particles(particle_t *par, long long n_part) {
-    for(long long i = 0; i < n_part; i++) {
-        printf("Particle %lld: X:%f Y:%f VX:%f VY:%f M:%f X_CELL:%d Y_CELL:%d\n", i, par[i].x, par[i].y, par[i].vx, par[i].vy, par[i].m, par[i].x_cell, par[i].y_cell);
-    }
-}
-
-//Test function to print force data
-void print_forces(particle_t *par, long long n_part) {
-    for(long long i = 0; i < n_part; i++) {
-        printf("Particle %lld: AX:%f AY:%f \n", i, par[i].ax, par[i].ay);
-    }
-}
-
-void detect_collisions(particle_t *par, long long *n_part, long long *collision_count) {
+// Collision detection: mark colliding particles and compact array
+void detect_collisions(particle_t *restrict par, long long *n_part, long long *collision_count) {
     long long i, j;
-    
-
-    // Mark particles for removal
     for (i = 0; i < *n_part; i++) {
-        if (par[i].removed) continue; // Already marked for removal
-
+        if (par[i].removed) continue;
         for (j = i + 1; j < *n_part; j++) {
-            if (par[j].removed) continue; // Already removed
-
+            if (par[j].removed) continue;
             double dx = par[j].x - par[i].x;
             double dy = par[j].y - par[i].y;
             double dist2 = dx * dx + dy * dy;
-
             if (dist2 < EPSILON2) {
-                printf("[Collision Detected] P%d and P%d are colliding!\n", i, j);
-
-                // Mark both particles as removed
                 par[i].removed = 1;
                 par[j].removed = 1;
                 (*collision_count)++;
             }
         }
     }
-
-    // Compact array to remove marked particles
     long long new_n_part = 0;
     for (i = 0; i < *n_part; i++) {
         if (!par[i].removed) {
             par[new_n_part] = par[i];
             new_n_part++;
-        } else {
-            printf("[Removing Particle] P%d from list\n", i);
         }
     }
-    //printf("[Updated Particle Count] New Count: %lld\n", new_n_part);
     *n_part = new_n_part;
 }
 
+// The following print functions are for testing and debugging and can be omitted in the final build
+void print_com(com_t *restrict com, long ncside) {
+    for (long i = 0; i < ncside * ncside; i++) {
+        printf("COM %ld: X:%f Y:%f M:%f\n", i, com[i].x, com[i].y, com[i].m);
+    }
+}
+
+void print_particles(particle_t *restrict par, long long n_part) {
+    for (long long i = 0; i < n_part; i++) {
+        printf("Particle %lld: X:%f Y:%f VX:%f VY:%f M:%f X_CELL:%d Y_CELL:%d\n",
+               i, par[i].x, par[i].y, par[i].vx, par[i].vy, par[i].m, par[i].x_cell, par[i].y_cell);
+    }
+}
+
+void print_forces(particle_t *restrict par, long long n_part) {
+    for (long long i = 0; i < n_part; i++) {
+        printf("Particle %lld: AX:%f AY:%f \n", i, par[i].ax, par[i].ay);
+    }
+}
