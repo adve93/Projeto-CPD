@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -O2 -Wall -Wextra -fopenmp
+CFLAGS = -O2 -fopenmp
 TARGET = parsim
 
 all: $(TARGET)
