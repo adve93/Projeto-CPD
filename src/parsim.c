@@ -76,6 +76,9 @@ cell_t* assign_particles_and_build_cells(particle_t *par, long long n_part, long
             fprintf(stderr, "Memory allocation failed for cell indices.\n");
             exit(1);
         }
+        cells[i].x = 0;
+        cells[i].y = 0;
+        cells[i].m = 0;
     }
     // Loop over particles once: assign cell indices and add to corresponding cell list.
     double inv_cell_size = 1.0 / cell_size; 
@@ -94,7 +97,19 @@ cell_t* assign_particles_and_build_cells(particle_t *par, long long n_part, long
             }
         }
         cells[cell_index].indices[cells[cell_index].count++] = i;
+        cells[cell_index].x += par[i].x * par[i].m;
+        cells[cell_index].y += par[i].y * par[i].m;
+        cells[cell_index].m += par[i].m;
+    
     }
+
+    for (long i = 0; i < total_cells; i++) {
+        if (cells[i].m > 0) {
+            cells[i].x /= cells[i].m;
+            cells[i].y /= cells[i].m;
+        }
+    }
+
     return cells;
 }
 
@@ -110,32 +125,9 @@ void free_cell_lists(cell_t *cells, long ncside) {
 // Simulation Helper Functions
 ///////////////////////////////////////
 
-// Compute the center of mass (COM) for each cell.
-void calculate_com(particle_t *par, com_t *com, long long n_part, long ncside) {
-    long total_cells = ncside * ncside;
-    // Initialize COM values.
-    for (long i = 0; i < total_cells; i++) {
-        com[i].x = 0;
-        com[i].y = 0;
-        com[i].m = 0;
-    }
-    for (long long i = 0; i < n_part; i++) {
-        int cell_index = par[i].y_cell * ncside + par[i].x_cell;
-        com[cell_index].x += par[i].x * par[i].m;
-        com[cell_index].y += par[i].y * par[i].m;
-        com[cell_index].m += par[i].m;
-    }
-    for (long i = 0; i < total_cells; i++) {
-        if (com[i].m > 0) {
-            com[i].x /= com[i].m;
-            com[i].y /= com[i].m;
-        }
-    }
-}
 
-// Calculate forces on each particle using spatial partitioning.
 // Calculate forces on each particle using spatial partitioning,
-void calculate_forces(particle_t *par, com_t *com, cell_t *cells, long long *n_part, long ncside, double side) {
+void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long ncside, double side) {
     double half_side = side / 2.0;
 
     // Zero accelerations for all particles.
@@ -184,16 +176,16 @@ void calculate_forces(particle_t *par, com_t *com, cell_t *cells, long long *n_p
                 int nx = (x_cell + dxc + ncside) % ncside;
                 int ny = (y_cell + dyc + ncside) % ncside;
                 int neighbor_index = ny * ncside + nx;
-                if (com[neighbor_index].m == 0) continue;
-                double dx_cm = com[neighbor_index].x - par[i].x;
-                double dy_cm = com[neighbor_index].y - par[i].y;
+                if (cells[neighbor_index].m == 0) continue;
+                double dx_cm = cells[neighbor_index].x - par[i].x;
+                double dy_cm = cells[neighbor_index].y - par[i].y;
                 if (dx_cm > half_side) dx_cm -= side;
                 if (dx_cm < -half_side) dx_cm += side;
                 if (dy_cm > half_side) dy_cm += side;
                 if (dy_cm < -half_side) dy_cm -= side;
                 double dist2_cm = dx_cm * dx_cm + dy_cm * dy_cm;
                 double r_cm = sqrt(dist2_cm);
-                double force_cm = (G * par[i].m * com[neighbor_index].m) / dist2_cm;
+                double force_cm = (G * par[i].m * cells[neighbor_index].m) / dist2_cm;
                 double ux_cm = dx_cm / r_cm;
                 double uy_cm = dy_cm / r_cm;
                 par[i].ax += force_cm * ux_cm / par[i].m;
@@ -302,13 +294,11 @@ void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n
 
 
 // Run one simulation time step using spatial partitioning
-void run_time_step(particle_t *par, long long *n_part, com_t *com, long ncside, double side, double cell_side, long long *collision_count) {
+void run_time_step(particle_t *par, long long *n_part, long ncside, double side, double cell_side, long long *collision_count) {
     // 1. Combined cell assignment and cell list build.
     cell_t *cells = assign_particles_and_build_cells(par, *n_part, ncside, cell_side);
-    // 2. Compute center of mass for each cell
-    calculate_com(par, com, *n_part, ncside);
     // 3. Compute forces using spatial partitioning: same-cell and adjacent cells
-    calculate_forces(par, com, cells, n_part, ncside, side);
+    calculate_forces(par, cells, n_part, ncside, side);
     // 4. Update positions and velocities
     update_positions_and_velocities(par, *n_part, side);
     // 5. Detect collisions (check only within the same cell)
@@ -341,20 +331,13 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     const double cell_side = side / ncside;
-    com_t *com = malloc(ncside * ncside * sizeof(com_t));
-    if (!com) {
-        fprintf(stderr, "Memory allocation failed for COM array.\n");
-        free(particles_arr);
-        return 1;
-    }
-    
     init_particles(seed, side, ncside, n_part, particles_arr);
     exec_time = -omp_get_wtime(); // (You can also use clock() for a purely sequential timing)
 
     long long collision_count = 0;
     for (long long t = 0; t < time_steps; t++) {
         printf("Time step %lld\n", t);
-        run_time_step(particles_arr, &n_part, com, ncside, side, cell_side, &collision_count);
+        run_time_step(particles_arr, &n_part, ncside, side, cell_side, &collision_count);
     }
 
     exec_time += omp_get_wtime();
@@ -364,16 +347,9 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "%.1fs\n", exec_time);
 
     free(particles_arr);
-    free(com);
     return 0;
 }
 
-// Print functions (for debugging)
-void print_com(com_t *com, long ncside) {
-    for (long i = 0; i < ncside * ncside; i++) {
-        printf("COM %ld: X:%f Y:%f M:%f\n", i, com[i].x, com[i].y, com[i].m);
-    }
-}
 void print_particles(particle_t *par, long long n_part) {
     for (long long i = 0; i < n_part; i++) {
         printf("Particle %lld: X:%f Y:%f VX:%f VY:%f M:%f X_CELL:%d Y_CELL:%d\n",
