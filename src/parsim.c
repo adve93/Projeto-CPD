@@ -221,34 +221,84 @@ void update_positions_and_velocities(particle_t *par, long long n_part, double s
 
 // Collision detection: check collisions within each cell.
 void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n_part, long long *collision_count) {
+    int *marked_for_removal = calloc(*n_part, sizeof(int)); // Track which particles should be removed
+    int *collision_group = calloc(*n_part, sizeof(int));    // Track if a particle is part of a collision chain
+    if (!marked_for_removal || !collision_group) {
+        fprintf(stderr, "Memory allocation failed.\n");
+        exit(1);
+    }
+
     for (long cell = 0; cell < ncside * ncside; cell++) {
         cell_t current = cells[cell];
+
         for (int i = 0; i < current.count; i++) {
             int idx_i = current.indices[i];
-            if (par[idx_i].removed) continue;
+            if (marked_for_removal[idx_i]) continue; // Skip already removed particles
+
+            int group_size = 1; // Start a new chain collision group
+            int first_particle = idx_i; // Keep track of the first particle in the chain
+
             for (int j = i + 1; j < current.count; j++) {
                 int idx_j = current.indices[j];
-                if (par[idx_j].removed) continue;
+                if (marked_for_removal[idx_j]) continue;
+
                 double dx = par[idx_j].x - par[idx_i].x;
                 double dy = par[idx_j].y - par[idx_i].y;
                 double dist2 = dx * dx + dy * dy;
+
                 if (dist2 <= EPSILON2) {
-                    par[idx_i].removed = 1;
-                    par[idx_j].removed = 1;
-                    (*collision_count)++;
+                    marked_for_removal[idx_j] = 1; // Mark for removal
+                    collision_group[idx_j] = 1; // Assign to a chain collision
+                    group_size++; // Increase the chain size
+
+                    if (group_size == 2) {
+                        marked_for_removal[idx_i] = 1; // Mark the first particle for removal
+                        collision_group[idx_i] = 1;
+                    }
+
+                    // Search for a third particle in the same cell
+                    for (int k = j + 1; k < current.count; k++) {
+                        int idx_k = current.indices[k];
+                        if (marked_for_removal[idx_k]) continue;
+
+                        double dx_k = par[idx_k].x - par[idx_j].x;
+                        double dy_k = par[idx_k].y - par[idx_j].y;
+                        double dist2_k = dx_k * dx_k + dy_k * dy_k;
+
+                        if (dist2_k <= EPSILON2) {
+                            marked_for_removal[idx_k] = 1;
+                            collision_group[idx_k] = 1;
+                            group_size++;
+
+                            if (group_size == 3) {
+                                break; // Stop at 3-particle collision
+                            }
+                        }
+                    }
+                    break; // Stop after finding a collision for idx_i
                 }
+            }
+
+            if (group_size > 1) {
+                (*collision_count)++; // Count the entire chain as ONE collision event
             }
         }
     }
-    // Compact particle array (serial loop)
+
+    // Compact particle array (remove collided particles)
     long long new_n_part = 0;
     for (long long i = 0; i < *n_part; i++) {
-        if (!par[i].removed) {
-            par[new_n_part++] = par[i];
+        if (!marked_for_removal[i]) {
+            par[new_n_part++] = par[i]; // Keep non-removed particles
         }
     }
     *n_part = new_n_part;
+
+    free(marked_for_removal);
+    free(collision_group);
 }
+
+
 
 // Run one simulation time step using spatial partitioning
 void run_time_step(particle_t *par, long long *n_part, com_t *com, long ncside, double side, double cell_side, long long *collision_count) {
