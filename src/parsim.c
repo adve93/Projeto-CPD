@@ -78,9 +78,10 @@ cell_t* assign_particles_and_build_cells(particle_t *par, long long n_part, long
         }
     }
     // Loop over particles once: assign cell indices and add to corresponding cell list.
+    double inv_cell_size = 1.0 / cell_size; 
     for (long long i = 0; i < n_part; i++) {
-        int x_cell = (int)(par[i].x / cell_size);
-        int y_cell = (int)(par[i].y / cell_size);
+        int x_cell = (int)(par[i].x * inv_cell_size);
+        int y_cell = (int)(par[i].y * inv_cell_size);
         par[i].x_cell = x_cell;
         par[i].y_cell = y_cell;
         int cell_index = y_cell * ncside + x_cell;
