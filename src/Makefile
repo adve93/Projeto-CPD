@@ -1,14 +1,25 @@
 CC = gcc
 CFLAGS = -O2 -fopenmp
-TARGET = parsim
 
-all: $(TARGET)
+# Targets
+TARGET_SEQ = parsim
+TARGET_OMP = parsim-omp
 
-$(TARGET): parsim.o
-	$(CC) $(CFLAGS) -o $(TARGET) parsim.o -lm
+all: $(TARGET_SEQ) $(TARGET_OMP)
+
+# Sequential version
+$(TARGET_SEQ): parsim.o
+	$(CC) $(CFLAGS) -o $(TARGET_SEQ) parsim.o -lm
 
 parsim.o: parsim.c
 	$(CC) $(CFLAGS) -c parsim.c
 
+# OpenMP version
+$(TARGET_OMP): parsim-omp.o
+	$(CC) $(CFLAGS) -o $(TARGET_OMP) parsim-omp.o -lm
+
+parsim-omp.o: parsim-omp.c
+	$(CC) $(CFLAGS) -c parsim-omp.c
+
 clean:
-	rm -f $(TARGET) *.o
+	rm -f $(TARGET_SEQ) $(TARGET_OMP) *.o
