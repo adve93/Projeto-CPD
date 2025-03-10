@@ -68,6 +68,7 @@ cell_t* assign_particles_and_build_cells(particle_t *par, long long n_part, long
         exit(1);
     }
     // Initialize each cell with a small capacity.
+    #pragma omp parallel for
     for (long i = 0; i < total_cells; i++) {
         cells[i].capacity = 10;
         cells[i].count = 0;
@@ -82,27 +83,33 @@ cell_t* assign_particles_and_build_cells(particle_t *par, long long n_part, long
     }
     // Loop over particles once: assign cell indices and add to corresponding cell list.
     double inv_cell_size = 1.0 / cell_size; 
+    #pragma omp parallel for
     for (long long i = 0; i < n_part; i++) {
         int x_cell = (int)(par[i].x * inv_cell_size);
         int y_cell = (int)(par[i].y * inv_cell_size);
         par[i].x_cell = x_cell;
         par[i].y_cell = y_cell;
         int cell_index = y_cell * ncside + x_cell;
-        if (cells[cell_index].count == cells[cell_index].capacity) {
-            cells[cell_index].capacity *= 2;
-            cells[cell_index].indices = realloc(cells[cell_index].indices, cells[cell_index].capacity * sizeof(int));
-            if (!cells[cell_index].indices) {
-                fprintf(stderr, "Memory reallocation failed for cell indices.\n");
-                exit(1);
+
+        #pragma omp critical 
+        {
+            if (cells[cell_index].count == cells[cell_index].capacity) {
+                cells[cell_index].capacity *= 2;
+                cells[cell_index].indices = realloc(cells[cell_index].indices, cells[cell_index].capacity * sizeof(int));
+                if (!cells[cell_index].indices) {
+                    fprintf(stderr, "Memory reallocation failed for cell indices.\n");
+                    exit(1);
+                }
             }
+        
+            cells[cell_index].indices[cells[cell_index].count++] = i;
+            cells[cell_index].x += par[i].x * par[i].m;
+            cells[cell_index].y += par[i].y * par[i].m;
+            cells[cell_index].m += par[i].m;
         }
-        cells[cell_index].indices[cells[cell_index].count++] = i;
-        cells[cell_index].x += par[i].x * par[i].m;
-        cells[cell_index].y += par[i].y * par[i].m;
-        cells[cell_index].m += par[i].m;
-    
     }
 
+    #pragma omp parallel for
     for (long i = 0; i < total_cells; i++) {
         if (cells[i].m > 0) {
             cells[i].x /= cells[i].m;
@@ -131,6 +138,7 @@ void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long nc
     double half_side = side / 2.0;
 
     // Zero accelerations for all particles.
+    #pragma omp parallel for
     for (long long i = 0; i < *n_part; i++) {
         par[i].ax = 0.0;
         par[i].ay = 0.0;
@@ -138,6 +146,7 @@ void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long nc
 
     // 1. Compute same-cell interactions using each unique pair only once.
     //    For each cell, loop over all pairs (i, j) with i < j.
+    #pragma omp parallel for
     for (long cell = 0; cell < ncside * ncside; cell++) {
         cell_t current = cells[cell];
         for (int a = 0; a < current.count; a++) {
@@ -157,9 +166,13 @@ void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long nc
                 double ux = dx * inv_r;
                 double uy = dy * inv_r;
 
+                #pragma omp atomic
                 par[i].ax += force * ux / par[i].m;
+                #pragma omp atomic
                 par[i].ay += force * uy / par[i].m;
+                #pragma omp atomic
                 par[j].ax -= force * ux / par[j].m;
+                #pragma omp atomic
                 par[j].ay -= force * uy / par[j].m;
             }
         }
@@ -197,14 +210,12 @@ void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long nc
 
 // Combined function to update positions and velocities in one loop.
 void update_positions_and_velocities(particle_t *par, long long n_part, double side) {
+    #pragma omp parallel for
     for (long long i = 0; i < n_part; i++) {
-        // Update velocity.
         par[i].vx += par[i].ax * DELTAT;
         par[i].vy += par[i].ay * DELTAT;
-        // Update position.
         par[i].x += par[i].vx * DELTAT;
         par[i].y += par[i].vy * DELTAT;
-        // Apply toroidal wrapping.
         if (par[i].x < 0) par[i].x += side;
         if (par[i].x >= side) par[i].x -= side;
         if (par[i].y < 0) par[i].y += side;
@@ -220,8 +231,6 @@ void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n
         exit(1);
     }
 
-    *collision_count = 0;  // Reset the count of collided particles
-
     // Loop through all cells
     for (long cell = 0; cell < ncside * ncside; cell++) {
         cell_t current = cells[cell];
@@ -233,6 +242,7 @@ void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n
             if (marked_for_removal[idx_i]) continue; // Already removed
 
             int group_size = 1; // Start tracking a collision group
+            int counted_this_group = 0; // Ensure we count this collision event once
 
             for (int j = i + 1; j < current.count; j++) {
                 int idx_j = current.indices[j];
@@ -243,15 +253,18 @@ void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n
                 double dist2 = dx * dx + dy * dy;
 
                 if (dist2 < (EPSILON2 + 1e-10)) { // Collision detected
-                    if (!marked_for_removal[idx_i]) {
-                        marked_for_removal[idx_i] = 1;
-                        (*collision_count)++;  // Count first particle
-                    }
-                    if (!marked_for_removal[idx_j]) {
-                        marked_for_removal[idx_j] = 1;
-                        (*collision_count)++;  // Count second particle
-                    }
+                    marked_for_removal[idx_j] = 1;
                     group_size++;
+
+                    if (group_size == 2) {
+                        marked_for_removal[idx_i] = 1; // Mark the first particle
+                    }
+
+                    // **Ensure we count this as ONE collision event**
+                    if (!counted_this_group) {
+                        (*collision_count)++;
+                        counted_this_group = 1; // Prevent multiple counts for the same event
+                    }
 
                     // Check for a third colliding particle
                     for (int k = j + 1; k < current.count; k++) {
@@ -263,10 +276,7 @@ void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n
                         double dist2_k = dx_k * dx_k + dy_k * dy_k;
 
                         if (dist2_k < (EPSILON2 + 1e-10)) {
-                            if (!marked_for_removal[idx_k]) {
-                                marked_for_removal[idx_k] = 1;
-                                (*collision_count)++;  // Count third particle
-                            }
+                            marked_for_removal[idx_k] = 1;
                             group_size++;
                             if (group_size == 3) break;  // Stop at 3-particle collision
                         }
@@ -288,7 +298,6 @@ void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n
 
     free(marked_for_removal);
 }
-
 
 
 
