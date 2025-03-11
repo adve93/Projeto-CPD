@@ -174,7 +174,7 @@ void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long nc
                 par[j].ay -= fy / par[j].m;
 
                 // Debug print for same-cell interactions
-                printf("P%d/P%d mag: %.6f fx: %.6f fy: %.6f\n", i, j, force, fx, fy);
+                //printf("P%d/P%d mag: %.6f fx: %.6f fy: %.6f\n", i, j, force, fx, fy);
             }
         }
     }
@@ -230,8 +230,7 @@ void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long nc
                 par[i].ax += fx_cm / par[i].m;
                 par[i].ay += fy_cm / par[i].m;
 
-                printf("P%d/C%d: mag=%.6f, fx=%.6f, fy=%.6f\n",
-                    i, neighbor_index, force_cm, fx_cm, fy_cm);
+                //printf("P%d/C%d: mag=%.6f, fx=%.6f, fy=%.6f\n", i, neighbor_index, force_cm, fx_cm, fy_cm);
             }
         }
     }
@@ -335,18 +334,12 @@ void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n
 
 // Run one simulation time step using spatial partitioning
 void run_time_step(particle_t *par, long long *n_part, long ncside, double side, double cell_side, long long *collision_count) {
-    // Print particle positions
-    for (int i = 0; i < *n_part; i++) {
-        printf("Particle %d: mass=%.6f x=%.6f y=%.6f vx=%.6f vy=%.6f\n X_CELL=%d Y_CELL=%d\n",
-                i, par[i].m, par[i].x, par[i].y,
-                par[i].vx, par[i].vy, par[i].x_cell, par[i].y_cell);
-    }
+    // Print particle positions (Debug)
+    //print_particles(par, n_part);
     // 1. Combined cell assignment and cell list build.
     cell_t *cells = assign_particles_and_build_cells(par, *n_part, ncside, cell_side);
-    // Print COM for each cell
-    for (int i = 0; i < ncside * ncside; i++) {
-        printf("Cell %d: x=%.6f y=%.6f m=%.6f\n", i, cells[i].x, cells[i].y, cells[i].m);
-    }
+    // Print COM for each cell (Debug)
+    //print_cells(cells, ncside);
     // 3. Compute forces using spatial partitioning: same-cell and adjacent cells
     calculate_forces(par, cells, n_part, ncside, side);
     // 4. Update positions and velocities
@@ -403,14 +396,21 @@ int main(int argc, char *argv[]) {
     return 0;
 }
 
-void print_particles(particle_t *par, long long n_part) {
-    for (long long i = 0; i < n_part; i++) {
-        printf("Particle %lld: X:%f Y:%f VX:%f VY:%f M:%f X_CELL:%d Y_CELL:%d\n",
-               i, par[i].x, par[i].y, par[i].vx, par[i].vy, par[i].m, par[i].x_cell, par[i].y_cell);
+void print_particles(particle_t *par, long long *n_part) {
+    for (int i = 0; i < *n_part; i++) {
+        printf("Particle %d: mass=%.6f x=%.6f y=%.6f vx=%.6f vy=%.6f\n X_CELL=%d Y_CELL=%d\n",
+                i, par[i].m, par[i].x, par[i].y,
+                par[i].vx, par[i].vy, par[i].x_cell, par[i].y_cell);
     }
 }
 void print_forces(particle_t *par, long long n_part) {
     for (long long i = 0; i < n_part; i++) {
         printf("Particle %lld: AX:%f AY:%f \n", i, par[i].ax, par[i].ay);
+    }
+}
+
+void print_cells(cell_t *cells, long ncside) {
+    for (int i = 0; i < ncside * ncside; i++) {
+        printf("Cell %d: x=%.6f y=%.6f m=%.6f\n", i, cells[i].x, cells[i].y, cells[i].m);
     }
 }
