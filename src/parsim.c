@@ -54,6 +54,73 @@ void init_particles(long seed, double side, long ncside, long long n_part, parti
         par[i].removed = 0;
     }
 }
+///////////////////////////////////////
+// Main Function
+///////////////////////////////////////
+
+int main(int argc, char *argv[]) {
+    if (argc != 6) {
+        fprintf(stderr, "Usage: %s <seed> <side> <grid_size> <num_particles> <time_steps>\n", argv[0]);
+        return 1;
+    }
+
+    double exec_time;
+    long seed = atol(argv[1]);              // Seed
+    double side = atof(argv[2]);            // Domain side length
+    long ncside = atol(argv[3]);            // Number of cells per side
+    long long n_part = atoll(argv[4]);      // Number of particles
+    long long time_steps = atoll(argv[5]);  // Number of time steps
+    
+    particle_t *particles_arr = malloc(n_part * sizeof(particle_t));
+    if (!particles_arr) {
+        fprintf(stderr, "Memory allocation failed for particles.\n");
+        return 1;
+    }
+    const double cell_side = side / ncside;
+    init_particles(seed, side, ncside, n_part, particles_arr);
+    exec_time = -omp_get_wtime();
+
+    long long collision_count = 0;
+    // Starting time step
+    printf("Simulation Start\n");
+    //run_time_step(particles_arr, &n_part, ncside, side, cell_side, &collision_count);
+    for (long long t = 0; t < time_steps; t++) {
+        printf("Time step %lld\n", t);
+        run_time_step(particles_arr, &n_part, ncside, side, cell_side, &collision_count);
+    }
+
+    exec_time += omp_get_wtime();
+
+    printf("\nParticle 0: %.3f %.3f\n", particles_arr[0].x, particles_arr[0].y);
+    printf("Collisions: %lld\n", collision_count);
+    fprintf(stderr, "%.1fs\n", exec_time);
+
+    free(particles_arr);
+    return 0;
+}
+
+///////////////////////////////////////
+// Runtime Pipeline
+///////////////////////////////////////
+
+// Run one simulation time step using spatial partitioning
+void run_time_step(particle_t *par, long long *n_part, long ncside, double side, double cell_side, long long *collision_count) {
+    // Print particle positions (Debug)
+    print_particles(par, n_part);
+    // 1. Combined cell assignment and cell list build.
+    cell_t *cells = assign_particles_and_build_cells(par, *n_part, ncside, cell_side);
+    // Print COM for each cell (Debug)
+    print_cells(cells, ncside);
+    // 3. Compute forces using spatial partitioning: same-cell and adjacent cells
+    calculate_forces(par, cells, n_part, ncside, side);
+    // 4. Update positions and velocities
+    update_positions_and_velocities(par, *n_part, side);
+    // 5. Detect collisions (check only within the same cell)
+    detect_collisions(cells, par, ncside, n_part, collision_count, side);
+    // Free cell lists for this time step
+    free_cell_lists(cells, ncside);
+}
+
 
 ///////////////////////////////////////
 // Spatial Partitioning Structures and Functions
@@ -319,71 +386,6 @@ void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n
     *n_part = new_n_part;
 
     free(marked_for_removal);
-}
-
-
-// Run one simulation time step using spatial partitioning
-void run_time_step(particle_t *par, long long *n_part, long ncside, double side, double cell_side, long long *collision_count) {
-    // Print particle positions (Debug)
-    print_particles(par, n_part);
-    // 1. Combined cell assignment and cell list build.
-    cell_t *cells = assign_particles_and_build_cells(par, *n_part, ncside, cell_side);
-    // Print COM for each cell (Debug)
-    print_cells(cells, ncside);
-    // 3. Compute forces using spatial partitioning: same-cell and adjacent cells
-    calculate_forces(par, cells, n_part, ncside, side);
-    // 4. Update positions and velocities
-    update_positions_and_velocities(par, *n_part, side);
-    // 5. Detect collisions (check only within the same cell)
-    detect_collisions(cells, par, ncside, n_part, collision_count, side);
-    // Free cell lists for this time step
-    free_cell_lists(cells, ncside);
-}
-
-
-///////////////////////////////////////
-// Main Function
-///////////////////////////////////////
-
-int main(int argc, char *argv[]) {
-    if (argc != 6) {
-        fprintf(stderr, "Usage: %s <seed> <side> <grid_size> <num_particles> <time_steps>\n", argv[0]);
-        return 1;
-    }
-
-    double exec_time;
-    long seed = atol(argv[1]);              // Seed
-    double side = atof(argv[2]);            // Domain side length
-    long ncside = atol(argv[3]);            // Number of cells per side
-    long long n_part = atoll(argv[4]);      // Number of particles
-    long long time_steps = atoll(argv[5]);  // Number of time steps
-    
-    particle_t *particles_arr = malloc(n_part * sizeof(particle_t));
-    if (!particles_arr) {
-        fprintf(stderr, "Memory allocation failed for particles.\n");
-        return 1;
-    }
-    const double cell_side = side / ncside;
-    init_particles(seed, side, ncside, n_part, particles_arr);
-    exec_time = -omp_get_wtime();
-
-    long long collision_count = 0;
-    // Starting time step
-    printf("Simulation Start\n");
-    //run_time_step(particles_arr, &n_part, ncside, side, cell_side, &collision_count);
-    for (long long t = 0; t < time_steps; t++) {
-        printf("Time step %lld\n", t);
-        run_time_step(particles_arr, &n_part, ncside, side, cell_side, &collision_count);
-    }
-
-    exec_time += omp_get_wtime();
-
-    printf("\nParticle 0: %.3f %.3f\n", particles_arr[0].x, particles_arr[0].y);
-    printf("Collisions: %lld\n", collision_count);
-    fprintf(stderr, "%.1fs\n", exec_time);
-
-    free(particles_arr);
-    return 0;
 }
 
 void print_particles(particle_t *par, long long *n_part) {
