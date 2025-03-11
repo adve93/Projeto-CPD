@@ -50,11 +50,7 @@ void init_particles(long seed, double side, long ncside, long long n_part, parti
         par[i].y = rnd01() * side;
         par[i].vx = (rnd01() - 0.5) * side / ncside / 5.0;
         par[i].vy = (rnd01() - 0.5) * side / ncside / 5.0;
-        par[i].ax = 0;
-        par[i].ay = 0;
         par[i].m  = rnd01() * 0.01 * (ncside * ncside) / n_part / G * EPSILON2;
-        par[i].x_cell = (int)(par[i].x / side * ncside);
-        par[i].y_cell = (int)(par[i].y / side * ncside);
         par[i].removed = 0;
     }
 }
@@ -152,12 +148,6 @@ void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long nc
                 double dx = par[j].x - par[i].x;
                 double dy = par[j].y - par[i].y;
 
-                // Apply toroidal adjustments
-                if (dx > half_side) dx -= side;
-                if (dx < -half_side) dx += side;
-                if (dy > half_side) dy -= side;
-                if (dy < -half_side) dy += side;
-
                 double dist2 = dx * dx + dy * dy;
 
                 // **Avoid division by zero**
@@ -174,7 +164,7 @@ void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long nc
                 par[j].ay -= fy / par[j].m;
 
                 // Debug print for same-cell interactions
-                //printf("P%d/P%d mag: %.6f fx: %.6f fy: %.6f\n", i, j, force, fx, fy);
+                printf("P%d/P%d mag: %.6f fx: %.6f fy: %.6f\n", i, j, force, fx, fy);
             }
         }
     }
@@ -230,7 +220,7 @@ void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long nc
                 par[i].ax += fx_cm / par[i].m;
                 par[i].ay += fy_cm / par[i].m;
 
-                //printf("P%d/C%d: mag=%.6f, fx=%.6f, fy=%.6f\n", i, neighbor_index, force_cm, fx_cm, fy_cm);
+                printf("P%d/C%d: mag=%.6f, fx=%.6f, fy=%.6f\n", i, neighbor_index, force_cm, fx_cm, fy_cm);
             }
         }
     }
@@ -335,11 +325,11 @@ void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n
 // Run one simulation time step using spatial partitioning
 void run_time_step(particle_t *par, long long *n_part, long ncside, double side, double cell_side, long long *collision_count) {
     // Print particle positions (Debug)
-    //print_particles(par, n_part);
+    print_particles(par, n_part);
     // 1. Combined cell assignment and cell list build.
     cell_t *cells = assign_particles_and_build_cells(par, *n_part, ncside, cell_side);
     // Print COM for each cell (Debug)
-    //print_cells(cells, ncside);
+    print_cells(cells, ncside);
     // 3. Compute forces using spatial partitioning: same-cell and adjacent cells
     calculate_forces(par, cells, n_part, ncside, side);
     // 4. Update positions and velocities
@@ -380,7 +370,7 @@ int main(int argc, char *argv[]) {
     long long collision_count = 0;
     // Starting time step
     printf("Simulation Start\n");
-    run_time_step(particles_arr, &n_part, ncside, side, cell_side, &collision_count);
+    //run_time_step(particles_arr, &n_part, ncside, side, cell_side, &collision_count);
     for (long long t = 0; t < time_steps; t++) {
         printf("Time step %lld\n", t);
         run_time_step(particles_arr, &n_part, ncside, side, cell_side, &collision_count);
