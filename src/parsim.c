@@ -313,6 +313,64 @@ void update_positions_and_velocities(particle_t *par, long long n_part, double s
     }
 }
 
+void detect_collisions_2(cell_t *cells, particle_t *par, long ncside, long long *n_part, long long *collision_count, double side) {
+
+    // Loop through all cells
+    for (long cell = 0; cell < ncside * ncside; cell++) {
+        cell_t current = cells[cell];
+        if (current.count < 2) continue; // No collision possible
+
+        // Iterate over all particles in the cell
+        for (int i = 0; i < current.count; i++) {
+            int idx_i = current.indices[i];
+            if (par[idx_i].removed == 1) continue; // Already removed
+
+            int group_size = 1; // Start tracking a collision group
+
+            for (int j = i + 1; j < current.count; j++) {
+                int idx_j = current.indices[j];
+                if (par[idx_j].removed == 1) continue;
+
+                double dx = par[idx_j].x - par[idx_i].x;
+                double dy = par[idx_j].y - par[idx_i].y;
+                double dist2 = dx * dx + dy * dy;
+
+                if (dist2 < (EPSILON2)) { // Collision detected
+                    par[idx_j].removed = 1;
+                    par[idx_j].m = 0;
+                    par[idx_i].removed = 1;
+                    par[idx_i].m = 0;
+                    group_size++;
+                    (*collision_count)++;
+                    printf("Collision %lld: P%d/P%d\n", *collision_count, idx_i, idx_j);
+                }
+    
+                
+                    
+
+                // Check for a third colliding particle
+                for (int k = j + 1; k < current.count; k++) {
+                    int idx_k = current.indices[k];
+                    if (par[idx_k].removed == 1) continue;
+
+                    double dx_k = par[idx_k].x - par[idx_j].x;
+                    double dy_k = par[idx_k].y - par[idx_j].y;
+                    double dist2_k = dx_k * dx_k + dy_k * dy_k;
+
+                    if (dist2_k < (EPSILON2)) {
+                        par[idx_k].removed = 1;
+                        par[idx_k].m = 0;
+                        group_size++;
+                        break;  // Stop at 3-particle collision
+                    }
+                }
+                    break;  // Stop after finding a collision for idx_i
+                }
+            }
+    }
+    
+}
+
 void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n_part, long long *collision_count, double side) {
     int *marked_for_removal = calloc(*n_part, sizeof(int)); // Track particles for deletion
     if (!marked_for_removal) {
@@ -340,8 +398,8 @@ void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n
                 double dx = par[idx_j].x - par[idx_i].x;
                 double dy = par[idx_j].y - par[idx_i].y;
                 double dist2 = dx * dx + dy * dy;
+                if (dist2 <  EPSILON2 * (1.0 + 1e-2)) { // Collision detected
 
-                if (dist2 < (EPSILON2 + 1e-10)) { // Collision detected
                     marked_for_removal[idx_j] = 1;
                     group_size++;
 
@@ -365,7 +423,7 @@ void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n
                         double dy_k = par[idx_k].y - par[idx_j].y;
                         double dist2_k = dx_k * dx_k + dy_k * dy_k;
 
-                        if (dist2_k < (EPSILON2 + 1e-10)) {
+                        if (dist2_k <  EPSILON2 * (1.0 + 1e-8)) {
                             marked_for_removal[idx_k] = 1;
                             group_size++;
                             if (group_size == 3) break;  // Stop at 3-particle collision
