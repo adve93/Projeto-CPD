@@ -50,7 +50,11 @@ void init_particles(long seed, double side, long ncside, long long n_part, parti
         par[i].y = rnd01() * side;
         par[i].vx = (rnd01() - 0.5) * side / ncside / 5.0;
         par[i].vy = (rnd01() - 0.5) * side / ncside / 5.0;
+        par[i].ax = 0;
+        par[i].ay = 0;
         par[i].m  = rnd01() * 0.01 * (ncside * ncside) / n_part / G * EPSILON2;
+        par[i].x_cell = (int)(par[i].x / side * ncside);
+        par[i].y_cell = (int)(par[i].y / side * ncside);
         par[i].removed = 0;
     }
 }
@@ -131,10 +135,10 @@ void free_cell_lists(cell_t *cells, long ncside) {
 void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long ncside, double side) {
     double half_side = side / 2.0;
 
-    // Zero accelerations for all particles.
+    // Reset accelerations
     for (long long i = 0; i < *n_part; i++) {
-        par[i].ax = 0.0;
-        par[i].ay = 0.0;
+        par[i].ax = 0;
+        par[i].ay = 0;
     }
 
     // 1. Compute same-cell interactions using each unique pair only once.
@@ -236,15 +240,19 @@ void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long nc
 // Combined function to update positions and velocities in one loop.
 void update_positions_and_velocities(particle_t *par, long long n_part, double side) {
     for (long long i = 0; i < n_part; i++) {
+        
+        // Update positions
+        par[i].x += par[i].vx * DELTAT + 0.5 * par[i].ax * DELTAT * DELTAT;
+        par[i].y += par[i].vy * DELTAT + 0.5 * par[i].ay * DELTAT * DELTAT;
+        
+        // if (par[i].x < 0) par[i].x += side;
+        // if (par[i].x >= side) par[i].x -= side;
+        // if (par[i].y < 0) par[i].y += side;
+        // if (par[i].y >= side) par[i].y -= side;
+
+        // Update velocities
         par[i].vx += par[i].ax * DELTAT;
         par[i].vy += par[i].ay * DELTAT;
-        par[i].x += par[i].vx * DELTAT;
-        par[i].y += par[i].vy * DELTAT;
-        if (par[i].x < 0) par[i].x += side;
-        if (par[i].x >= side) par[i].x -= side;
-        if (par[i].y < 0) par[i].y += side;
-        if (par[i].y >= side) par[i].y -= side;
-        
     }
 }
 
@@ -377,6 +385,9 @@ int main(int argc, char *argv[]) {
     exec_time = -omp_get_wtime();
 
     long long collision_count = 0;
+    // Starting time step
+    printf("Simulation Start\n");
+    run_time_step(particles_arr, &n_part, ncside, side, cell_side, &collision_count);
     for (long long t = 0; t < time_steps; t++) {
         printf("Time step %lld\n", t);
         run_time_step(particles_arr, &n_part, ncside, side, cell_side, &collision_count);
