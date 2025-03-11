@@ -149,8 +149,8 @@ void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long nc
                 // Apply toroidal adjustments
                 if (dx > half_side) dx -= side;
                 if (dx < -half_side) dx += side;
-                if (dy > half_side) dy += side;  // using your Y convention
-                if (dy < -half_side) dy -= side;
+                if (dy > half_side) dy -= side;  // using your Y convention
+                if (dy < -half_side) dy += side;
                 double dist2 = dx * dx + dy * dy;
                 double inv_r = 1.0 / sqrt(dist2);  // Optimized inverse square root
                 double force = G * par[i].m * par[j].m * inv_r * inv_r; 
@@ -181,8 +181,8 @@ void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long nc
                 double dy_cm = cells[neighbor_index].y - par[i].y;
                 if (dx_cm > half_side) dx_cm -= side;
                 if (dx_cm < -half_side) dx_cm += side;
-                if (dy_cm > half_side) dy_cm += side;
-                if (dy_cm < -half_side) dy_cm -= side;
+                if (dy_cm > half_side) dy_cm -= side;
+                if (dy_cm < -half_side) dy_cm += side;
                 double dist2_cm = dx_cm * dx_cm + dy_cm * dy_cm;
                 double r_cm = sqrt(dist2_cm);
                 double force_cm = (G * par[i].m * cells[neighbor_index].m) / dist2_cm;
