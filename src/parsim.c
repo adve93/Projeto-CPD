@@ -387,7 +387,7 @@ void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n
                     if (!counted_this_group) {
                         (*collision_count)++;
                         counted_this_group = 1; // Prevent multiple counts for the same event
-                        printf("Collision %lld: P%d/P%d\n", *collision_count, idx_i, idx_j);
+                        //printf("Collision %lld: P%d/P%d\n", *collision_count, idx_i, idx_j);
                     }
 
                     // Check for a third colliding particle

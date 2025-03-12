@@ -355,17 +355,20 @@ void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n
         exit(1);
     }
 
-    // Loop through all cells
+    long long local_collision_count = 0; // Each thread will maintain its own counter
+
+    // **Parallelize the outer loop over cells**
+    #pragma omp parallel for reduction(+:local_collision_count) schedule(dynamic)
     for (long cell = 0; cell < ncside * ncside; cell++) {
         cell_t current = cells[cell];
         if (current.count < 2) continue; // No collision possible
-        // Iterate over all particles in the cell
+
         for (int i = 0; i < current.count; i++) {
             int idx_i = current.indices[i];
-            if (marked_for_removal[idx_i]) continue; // Already removed
+            if (marked_for_removal[idx_i]) continue;
 
-            int group_size = 1; // Start tracking a collision group
-            int counted_this_group = 0; // Ensure we count this collision event once
+            int group_size = 1;
+            int counted_this_group = 0;
 
             for (int j = i + 1; j < current.count; j++) {
                 int idx_j = current.indices[j];
@@ -375,19 +378,17 @@ void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n
                 double dy = par[idx_j].y - par[idx_i].y;
                 double dist2 = dx * dx + dy * dy;
 
-                if (dist2 <  EPSILON2) { // Collision detected
+                if (dist2 < EPSILON2) {
                     marked_for_removal[idx_j] = 1;
                     group_size++;
 
                     if (group_size == 2) {
-                        marked_for_removal[idx_i] = 1; // Mark the first particle
+                        marked_for_removal[idx_i] = 1;
                     }
 
-                    // **Ensure we count this as ONE collision event**
                     if (!counted_this_group) {
-                        (*collision_count)++;
-                        counted_this_group = 1; // Prevent multiple counts for the same event
-                        printf("Collision %lld: P%d/P%d\n", *collision_count, idx_i, idx_j);
+                        local_collision_count++;
+                        counted_this_group = 1;
                     }
 
                     // Check for a third colliding particle
@@ -399,29 +400,34 @@ void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n
                         double dy_k = par[idx_k].y - par[idx_j].y;
                         double dist2_k = dx_k * dx_k + dy_k * dy_k;
 
-                        if (dist2_k <  EPSILON2) {
+                        if (dist2_k < EPSILON2) {
                             marked_for_removal[idx_k] = 1;
                             group_size++;
-                            if (group_size == 3) break;  // Stop at 3-particle collision
+                            if (group_size == 3) break;
                         }
                     }
-                    break;  // Stop after finding a collision for idx_i
+                    break;
                 }
             }
         }
     }
 
-    // Compact the particle array (remove collided particles)
+    // **Atomic update to global collision count**
+    #pragma omp atomic
+    *collision_count += local_collision_count;
+
+    // **Particle Removal (Sequential Step)**
     long long new_n_part = 0;
     for (long long i = 0; i < *n_part; i++) {
         if (!marked_for_removal[i]) {
-            par[new_n_part++] = par[i]; // Keep valid particles
+            par[new_n_part++] = par[i];
         }
     }
     *n_part = new_n_part;
 
     free(marked_for_removal);
 }
+
 
 void print_particles(particle_t *par, long long n_part) {
     for (int i = 0; i < n_part; i++) {
