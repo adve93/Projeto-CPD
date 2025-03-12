@@ -27,9 +27,9 @@ void init_particles(long seed, double side, long ncside, long long n_part, parti
 cell_t* assign_particles_and_build_cells(particle_t *par, long long n_part, long ncside, double cell_size);
 void free_cell_lists(cell_t *cells, long ncside);
 void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long ncside, double side);
-void update_positions_and_velocities(particle_t *par, long long n_part, double side);
-void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n_part, long long *collision_count, double side);
-void run_time_step(particle_t *par, long long *n_part, long ncside, double side, double cell_side, long long *collision_count);
+void update_positions_and_velocities(particle_t *par, long long n_part, double side, double cell_size, cell_t *cells, long ncside);
+void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n_part, long long *collision_count, double side, long long timestep);
+void run_time_step(particle_t *par, long long *n_part, long ncside, double side, double cell_side, long long *collision_count, long long timestep);
 void print_particles(particle_t *par, long long n_part);
 void print_cells(cell_t *cells, long ncside);
 void detect_collisions_2(cell_t *cells, particle_t *par, long ncside, long long *n_part, long long *collision_count, double side);
