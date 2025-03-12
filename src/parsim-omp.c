@@ -437,6 +437,7 @@ void print_cells(cell_t *cells, long ncside) {
     }
 }
 
+
 void print_forces(particle_t *par, long long n_part) {
     for (long long i = 0; i < n_part; i++) {
         printf("Particle %lld: AX:%f AY:%f \n", i, par[i].ax, par[i].ay);
