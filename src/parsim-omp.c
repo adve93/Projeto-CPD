@@ -15,43 +15,49 @@
 ///////////////////////////////////////
 
 unsigned int seed;
-void init_r4uni(int input_seed) {
+void init_r4uni(int input_seed)
+{
     seed = input_seed + 987654321;
 }
-
-double rnd_uniform01() {
+double rnd_uniform01()
+{
     int seed_in = seed;
     seed ^= (seed << 13);
     seed ^= (seed >> 17);
     seed ^= (seed << 5);
     return 0.5 + 0.2328306e-09 * (seed_in + (int) seed);
 }
-
-double rnd_normal01() {
+double rnd_normal01()
+{
     double u1, u2, z, result;
     do {
         u1 = rnd_uniform01();
         u2 = rnd_uniform01();
         z = sqrt(-2 * log(u1)) * cos(2 * M_PI * u2);
-        result = 0.5 + 0.15 * z; // Shift mean to 0.5 and scale
+        result = 0.5 + 0.15 * z;      // Shift mean to 0.5 and scale
     } while (result < 0 || result >= 1);
     return result;
 }
 
-void init_particles(long seed, double side, long ncside, long long n_part, particle_t *par) {
+void init_particles(long userseed, double side, long ncside, long long n_part, particle_t *par)
+{
     double (*rnd01)() = rnd_uniform01;
-    if (seed < 0) {
+    long long i;
+
+    if(userseed < 0) {
         rnd01 = rnd_normal01;
-        seed = -seed;
+        userseed = -userseed;
     }
-    init_r4uni(seed);
-    for (long long i = 0; i < n_part; i++) {
+    
+    init_r4uni(userseed);
+
+    for(i = 0; i < n_part; i++) {
         par[i].x = rnd01() * side;
         par[i].y = rnd01() * side;
         par[i].vx = (rnd01() - 0.5) * side / ncside / 5.0;
         par[i].vy = (rnd01() - 0.5) * side / ncside / 5.0;
-        par[i].m  = rnd01() * 0.01 * (ncside * ncside) / n_part / G * EPSILON2;
-        par[i].removed = 0;
+
+        par[i].m = rnd01() * 0.01 * (ncside * ncside) / n_part / G * EPSILON2;
     }
 }
 
@@ -82,18 +88,16 @@ int main(int argc, char *argv[]) {
     exec_time = -omp_get_wtime();
 
     long long collision_count = 0;
-    // Starting time step
-    printf("Simulation Start\n");
     for (long long t = 0; t < time_steps; t++) {
-        printf("Time step %lld\n", t);
+        // printf("Time step %lld\n", t);
         run_time_step(particles_arr, &n_part, ncside, side, cell_side, &collision_count, t);
     }
-    //print_particles(particles_arr, n_part);
+    // print_particles(particles_arr, n_part);
 
     exec_time += omp_get_wtime();
 
-    printf("\nParticle 0: %.3f %.3f\n", particles_arr[0].x, particles_arr[0].y);
-    printf("Collisions: %lld\n", collision_count);
+    printf("%.3f %.3f\n", particles_arr[0].x, particles_arr[0].y);
+    printf("%lld\n", collision_count);
     fprintf(stderr, "%.1fs\n", exec_time);
 
     free(particles_arr);
@@ -141,13 +145,17 @@ cell_t* assign_particles_and_build_cells(particle_t *par, long long n_part, long
         exit(1);
     }
 
+    // Phase 1: Count particles per cell (parallel)
+    #pragma omp parallel for
     for (long long i = 0; i < n_part; i++) {
         int x_cell = (int)(par[i].x * inv_cell_size);
         int y_cell = (int)(par[i].y * inv_cell_size);
         int cell_index = y_cell * ncside + x_cell;
+        #pragma omp atomic
         cell_counts[cell_index]++;
     }
 
+    // Initialize cells
     for (long i = 0; i < total_cells; i++) {
         cells[i].capacity = cell_counts[i] > 10 ? cell_counts[i] : 10;
         cells[i].count = 0;
@@ -161,39 +169,35 @@ cell_t* assign_particles_and_build_cells(particle_t *par, long long n_part, long
         cells[i].m = 0;
     }
 
-    free(cell_counts);
+    // Phase 2: Assign particles to cells (parallel)
+    #pragma omp parallel for
+    for (long long i = 0; i < n_part; i++) {
+        int x_cell = (int)(par[i].x * inv_cell_size);
+        int y_cell = (int)(par[i].y * inv_cell_size);
+        par[i].x_cell = x_cell;
+        par[i].y_cell = y_cell;
+        int cell_index = y_cell * ncside + x_cell;
+        int local_index;
+        #pragma omp atomic capture
+        local_index = cells[cell_index].count++;
+        cells[cell_index].indices[local_index] = i;
+    }
 
-    //assign particles to cells
-    #pragma omp parallel
-    {
-        #pragma omp for
-        for (long long i = 0; i < n_part; i++) {
-            int x_cell = (int)(par[i].x * inv_cell_size);
-            int y_cell = (int)(par[i].y * inv_cell_size);
-            par[i].x_cell = x_cell;
-            par[i].y_cell = y_cell;
-            int cell_index = y_cell * ncside + x_cell;
-
-            // **Use atomic fetch-and-add to safely increment count**
-            int local_index;
-            local_index = cells[cell_index].count++;
-
-            cells[cell_index].indices[local_index] = i;
-            cells[cell_index].x += par[i].x * par[i].m;
-            cells[cell_index].y += par[i].y * par[i].m;
-            cells[cell_index].m += par[i].m;
+    // Phase 3: Compute center of mass in sequential order
+    for (long i = 0; i < total_cells; i++) {
+        for (int j = 0; j < cells[i].count; j++) {
+            int idx = cells[i].indices[j];
+            cells[i].x += par[idx].x * par[idx].m;
+            cells[i].y += par[idx].y * par[idx].m;
+            cells[i].m += par[idx].m;
         }
-
-        // **Step 4: Compute center of mass (parallel)**
-        #pragma omp for
-        for (long i = 0; i < total_cells; i++) {
-            if (cells[i].m > 0) {
-                cells[i].x /= cells[i].m;
-                cells[i].y /= cells[i].m;
-            }
+        if (cells[i].m > 0) {
+            cells[i].x /= cells[i].m;
+            cells[i].y /= cells[i].m;
         }
     }
 
+    free(cell_counts);
     return cells;
 }
 
@@ -213,16 +217,18 @@ void free_cell_lists(cell_t *cells, long ncside) {
 // Calculate forces on each particle using spatial partitioning,
 void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long ncside, double side) {
     int num_threads = omp_get_max_threads();
-
-    // Allocate thread-local buffers
     double **local_ax = malloc(num_threads * sizeof(double*));
     double **local_ay = malloc(num_threads * sizeof(double*));
     for (int t = 0; t < num_threads; t++) {
-        local_ax[t] = calloc(*n_part, sizeof(double));  // Use *n_part
-        local_ay[t] = calloc(*n_part, sizeof(double));  // Use *n_part
+        local_ax[t] = calloc(*n_part, sizeof(double));
+        local_ay[t] = calloc(*n_part, sizeof(double));
     }
 
-    // Parallelize same-cell interactions
+    for (long long i = 0; i < *n_part; i++) {
+        par[i].ax = 0;
+        par[i].ay = 0;
+    }
+
     #pragma omp parallel for schedule(dynamic)
     for (long cell = 0; cell < ncside * ncside; cell++) {
         int thread_id = omp_get_thread_num();
@@ -231,18 +237,13 @@ void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long nc
             int i = current.indices[a];
             for (int b = a + 1; b < current.count; b++) {
                 int j = current.indices[b];
-
                 double dx = par[j].x - par[i].x;
                 double dy = par[j].y - par[i].y;
                 double dist2 = dx * dx + dy * dy;
-                if (dist2 < EPSILON2) continue;
-
                 double inv_r = 1.0 / sqrt(dist2);
                 double force = G * (par[i].m * par[j].m) / dist2;
                 double fx = force * dx * inv_r;
                 double fy = force * dy * inv_r;
-
-                // Store forces in thread-local buffers
                 local_ax[thread_id][i] += fx / par[i].m;
                 local_ay[thread_id][i] += fy / par[i].m;
                 local_ax[thread_id][j] -= fx / par[j].m;
@@ -251,7 +252,6 @@ void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long nc
         }
     }
 
-    // Parallelize neighbor cell interactions
     #pragma omp parallel for
     for (long long i = 0; i < *n_part; i++) {
         int thread_id = omp_get_thread_num();
@@ -264,32 +264,29 @@ void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long nc
                 int ny = (y_cell + dyc + ncside) % ncside;
                 int neighbor_index = ny * ncside + nx;
                 if (cells[neighbor_index].m == 0) continue;
-
                 double dx_cm = cells[neighbor_index].x - par[i].x;
                 double dy_cm = cells[neighbor_index].y - par[i].y;
                 int diff_x = nx - x_cell;
-                if (diff_x > ncside/2) dx_cm += side;
-                else if (diff_x < -ncside/2) dx_cm -= side;
+                if (diff_x > ncside/2) diff_x -= ncside;
+                if (diff_x < -ncside/2) diff_x += ncside;
+                if (diff_x > 0 && dx_cm < 0) dx_cm += side;
+                else if (diff_x < 0 && dx_cm > 0) dx_cm -= side;
                 int diff_y = ny - y_cell;
-                if (diff_y > ncside/2) dy_cm += side;
-                else if (diff_y < -ncside/2) dy_cm -= side;
-
+                if (diff_y > ncside/2) diff_y -= ncside;
+                if (diff_y < -ncside/2) diff_y += ncside;
+                if (diff_y > 0 && dy_cm < 0) dy_cm += side;
+                else if (diff_y < 0 && dy_cm > 0) dy_cm -= side;
                 double dist2_cm = dx_cm * dx_cm + dy_cm * dy_cm;
-                if (dist2_cm < EPSILON2) continue;
-
                 double inv_r_cm = 1.0 / sqrt(dist2_cm);
                 double force_cm = G * (par[i].m * cells[neighbor_index].m) / dist2_cm;
                 double fx_cm = force_cm * dx_cm * inv_r_cm;
                 double fy_cm = force_cm * dy_cm * inv_r_cm;
-
-                // Store in thread-local buffers
                 local_ax[thread_id][i] += fx_cm / par[i].m;
                 local_ay[thread_id][i] += fy_cm / par[i].m;
             }
         }
     }
 
-    // Combine results
     for (long long i = 0; i < *n_part; i++) {
         for (int t = 0; t < num_threads; t++) {
             par[i].ax += local_ax[t][i];
@@ -297,7 +294,6 @@ void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long nc
         }
     }
 
-    // Cleanup
     for (int t = 0; t < num_threads; t++) {
         free(local_ax[t]);
         free(local_ay[t]);
