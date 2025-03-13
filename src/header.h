@@ -32,6 +32,5 @@ void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n
 void run_time_step(particle_t *par, long long *n_part, long ncside, double side, double cell_side, long long *collision_count, long long timestep);
 void print_particles(particle_t *par, long long n_part);
 void print_cells(cell_t *cells, long ncside);
-void detect_collisions_2(cell_t *cells, particle_t *par, long ncside, long long *n_part, long long *collision_count, double side);
 
 #endif

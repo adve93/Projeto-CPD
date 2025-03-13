@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -O2 -fopenmp
+FLAGS = -O2 -fopenmp
 
 # Targets
 TARGET_SEQ = parsim
@@ -7,19 +7,25 @@ TARGET_OMP = parsim-omp
 
 all: $(TARGET_SEQ) $(TARGET_OMP)
 
-# Sequential version
+# Sequential version (no OpenMP)
 $(TARGET_SEQ): parsim.o
-	$(CC) $(CFLAGS) -o $(TARGET_SEQ) parsim.o -lm
+	$(CC) $(FLAGS) -o $(TARGET_SEQ) parsim.o -lm
 
 parsim.o: parsim.c
-	$(CC) $(CFLAGS) -c parsim.c
+	$(CC) $(FLAGS) -c parsim.c
 
-# OpenMP version
+# OpenMP version (linked with OpenMP)
 $(TARGET_OMP): parsim-omp.o
-	$(CC) $(CFLAGS) -o $(TARGET_OMP) parsim-omp.o -lm
+	$(CC) $(FLAGS) -o $(TARGET_OMP) parsim-omp.o -lm
 
 parsim-omp.o: parsim-omp.c
-	$(CC) $(CFLAGS) -c parsim-omp.c
+	$(CC) $(FLAGS) -c parsim-omp.c
+
+# Build only the sequential version
+seq: $(TARGET_SEQ)
+
+# Build only the OpenMP parallel version
+omp: $(TARGET_OMP)
 
 clean:
 	rm -f $(TARGET_SEQ) $(TARGET_OMP) *.o
