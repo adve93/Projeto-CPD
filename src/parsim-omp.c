@@ -126,7 +126,6 @@ void run_time_step(particle_t *par, long long *n_part, long ncside, double side,
 // Spatial Partitioning Structures and Functions
 ///////////////////////////////////////
 
-// Combined function: assign each particle to a cell and build cell lists.
 cell_t* assign_particles_and_build_cells(particle_t *par, long long n_part, long ncside, double cell_size) {
     long total_cells = ncside * ncside;
     cell_t *cells = malloc(total_cells * sizeof(cell_t));
@@ -134,9 +133,26 @@ cell_t* assign_particles_and_build_cells(particle_t *par, long long n_part, long
         fprintf(stderr, "Memory allocation failed for cell lists.\n");
         exit(1);
     }
-    // Initialize each cell with a small capacity.
+
+    double inv_cell_size = 1.0 / cell_size;
+    
+    // **Step 1: Precompute maximum required capacity for each cell (serial)**
+    int *cell_counts = calloc(total_cells, sizeof(int));
+    if (!cell_counts) {
+        fprintf(stderr, "Memory allocation failed for cell counts.\n");
+        exit(1);
+    }
+
+    for (long long i = 0; i < n_part; i++) {
+        int x_cell = (int)(par[i].x * inv_cell_size);
+        int y_cell = (int)(par[i].y * inv_cell_size);
+        int cell_index = y_cell * ncside + x_cell;
+        cell_counts[cell_index]++;
+    }
+
+    // **Step 2: Allocate exact memory for each cell (serial)**
     for (long i = 0; i < total_cells; i++) {
-        cells[i].capacity = 10;
+        cells[i].capacity = cell_counts[i] > 10 ? cell_counts[i] : 10;
         cells[i].count = 0;
         cells[i].indices = malloc(cells[i].capacity * sizeof(int));
         if (!cells[i].indices) {
@@ -147,34 +163,43 @@ cell_t* assign_particles_and_build_cells(particle_t *par, long long n_part, long
         cells[i].y = 0;
         cells[i].m = 0;
     }
-    // Loop over particles once: assign cell indices and add to corresponding cell list.
-    double inv_cell_size = 1.0 / cell_size; 
-    for (long long i = 0; i < n_part; i++) {
-        int x_cell = (int)(par[i].x * inv_cell_size );
-        int y_cell = (int)(par[i].y * inv_cell_size );
-        par[i].x_cell = x_cell;
-        par[i].y_cell = y_cell;
-        int cell_index = y_cell * ncside + x_cell;
 
-        if (cells[cell_index].count == cells[cell_index].capacity) {
-            cells[cell_index].capacity *= 2;
-            cells[cell_index].indices = realloc(cells[cell_index].indices, cells[cell_index].capacity * sizeof(int));
-            if (!cells[cell_index].indices) {
-                fprintf(stderr, "Memory reallocation failed for cell indices.\n");
-                exit(1);
-            }
+    free(cell_counts); // Not needed anymore
+
+    // **Step 3: Assign particles to cells (parallel)**
+    #pragma omp parallel
+    {
+        #pragma omp for
+        for (long long i = 0; i < n_part; i++) {
+            int x_cell = (int)(par[i].x * inv_cell_size);
+            int y_cell = (int)(par[i].y * inv_cell_size);
+            par[i].x_cell = x_cell;
+            par[i].y_cell = y_cell;
+            int cell_index = y_cell * ncside + x_cell;
+
+            // **Use atomic fetch-and-add to safely increment count**
+            int local_index;
+            #pragma omp atomic capture
+            local_index = cells[cell_index].count++;
+
+            cells[cell_index].indices[local_index] = i;
+
+            // **Atomic accumulation for center of mass values**
+            #pragma omp atomic
+            cells[cell_index].x += par[i].x * par[i].m;
+            #pragma omp atomic
+            cells[cell_index].y += par[i].y * par[i].m;
+            #pragma omp atomic
+            cells[cell_index].m += par[i].m;
         }
-    
-        cells[cell_index].indices[cells[cell_index].count++] = i;
-        cells[cell_index].x += par[i].x * par[i].m;
-        cells[cell_index].y += par[i].y * par[i].m;
-        cells[cell_index].m += par[i].m;
-    }
 
-    for (long i = 0; i < total_cells; i++) {
-        if (cells[i].m > 0) {
-            cells[i].x /= cells[i].m;
-            cells[i].y /= cells[i].m;
+        // **Step 4: Compute center of mass (parallel)**
+        #pragma omp for
+        for (long i = 0; i < total_cells; i++) {
+            if (cells[i].m > 0) {
+                cells[i].x /= cells[i].m;
+                cells[i].y /= cells[i].m;
+            }
         }
     }
 
