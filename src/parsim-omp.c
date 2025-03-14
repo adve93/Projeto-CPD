@@ -10,6 +10,9 @@
 #define DELTAT 0.1
 #define M_PI 3.14159265358979323846
 
+// Global variables for thread management
+int max_threads = 0;
+
 ///////////////////////////////////////
 // Random and Initialization Functions
 ///////////////////////////////////////
@@ -83,6 +86,10 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Memory allocation failed for particles.\n");
         return 1;
     }
+
+    // Set max threads once
+    max_threads = omp_get_max_threads();
+
     const double cell_side = side / ncside;
     init_particles(seed, side, ncside, n_part, particles_arr);
     exec_time = -omp_get_wtime();
@@ -134,70 +141,75 @@ cell_t* assign_particles_and_build_cells(particle_t *par, long long n_part, long
     long total_cells = ncside * ncside;
     double inv_cell_size = 1.0 / cell_size;
     cell_t *cells = malloc(total_cells * sizeof(cell_t));
-    if (!cells) {
-        fprintf(stderr, "Memory allocation failed for cell lists.\n");
-        exit(1);
+
+    // Thread-local counters
+    int **local_counts = malloc(max_threads * sizeof(int*));
+    for (int t = 0; t < max_threads; t++) {
+        local_counts[t] = calloc(total_cells, sizeof(int));
     }
 
-    int *cell_counts = calloc(total_cells, sizeof(int));
-    if (!cell_counts) {
-        fprintf(stderr, "Memory allocation failed for cell counts.\n");
-        exit(1);
-    }
+    #pragma omp parallel
+    {
+        int tid = omp_get_thread_num();
 
-    // Phase 1: Count particles per cell (parallel)
-    #pragma omp parallel for
-    for (long long i = 0; i < n_part; i++) {
-        int x_cell = (int)(par[i].x * inv_cell_size);
-        int y_cell = (int)(par[i].y * inv_cell_size);
-        int cell_index = y_cell * ncside + x_cell;
-        #pragma omp atomic
-        cell_counts[cell_index]++;
-    }
-
-    // Initialize cells
-    for (long i = 0; i < total_cells; i++) {
-        cells[i].capacity = cell_counts[i] > 10 ? cell_counts[i] : 10;
-        cells[i].count = 0;
-        cells[i].indices = malloc(cells[i].capacity * sizeof(int));
-        if (!cells[i].indices) {
-            fprintf(stderr, "Memory allocation failed for cell indices.\n");
-            exit(1);
+        // Count particles per cell
+        #pragma omp for
+        for (long long i = 0; i < n_part; i++) {
+            int x_cell = (int)(par[i].x * inv_cell_size);
+            int y_cell = (int)(par[i].y * inv_cell_size);
+            int cell_index = y_cell * ncside + x_cell;
+            local_counts[tid][cell_index]++;
         }
-        cells[i].x = 0;
-        cells[i].y = 0;
-        cells[i].m = 0;
-    }
 
-    // Phase 2: Assign particles to cells (parallel)
-    #pragma omp parallel for
-    for (long long i = 0; i < n_part; i++) {
-        int x_cell = (int)(par[i].x * inv_cell_size);
-        int y_cell = (int)(par[i].y * inv_cell_size);
-        par[i].x_cell = x_cell;
-        par[i].y_cell = y_cell;
-        int cell_index = y_cell * ncside + x_cell;
-        int local_index;
-        #pragma omp atomic capture
-        local_index = cells[cell_index].count++;
-        cells[cell_index].indices[local_index] = i;
-    }
-
-    // Phase 3: Compute center of mass in sequential order
-    for (long i = 0; i < total_cells; i++) {
-        for (int j = 0; j < cells[i].count; j++) {
-            int idx = cells[i].indices[j];
-            cells[i].x += par[idx].x * par[idx].m;
-            cells[i].y += par[idx].y * par[idx].m;
-            cells[i].m += par[idx].m;
+        // Aggregate counts and initialize cells
+        #pragma omp single
+        for (long i = 0; i < total_cells; i++) {
+            int total_count = 0;
+            for (int t = 0; t < max_threads; t++) {
+                total_count += local_counts[t][i];
+            }
+            cells[i].capacity = total_count > 10 ? total_count : 10;
+            cells[i].count = 0;
+            cells[i].indices = malloc(cells[i].capacity * sizeof(int));
+            cells[i].x = 0;
+            cells[i].y = 0;
+            cells[i].m = 0;
         }
-        if (cells[i].m > 0) {
-            cells[i].x /= cells[i].m;
-            cells[i].y /= cells[i].m;
+
+        // Assign particles
+        #pragma omp for
+        for (long long i = 0; i < n_part; i++) {
+            int x_cell = (int)(par[i].x * inv_cell_size);
+            int y_cell = (int)(par[i].y * inv_cell_size);
+            par[i].x_cell = x_cell;
+            par[i].y_cell = y_cell;
+            int cell_index = y_cell * ncside + x_cell;
+            int pos;
+            #pragma omp atomic capture
+            pos = cells[cell_index].count++;
+            cells[cell_index].indices[pos] = i;
+        }
+
+        // Parallel center of mass computation
+        #pragma omp for
+        for (long i = 0; i < total_cells; i++) {
+            for (int j = 0; j < cells[i].count; j++) {
+                int idx = cells[i].indices[j];
+                cells[i].x += par[idx].x * par[idx].m;
+                cells[i].y += par[idx].y * par[idx].m;
+                cells[i].m += par[idx].m;
+            }
+            if (cells[i].m > 0) {
+                cells[i].x /= cells[i].m;
+                cells[i].y /= cells[i].m;
+            }
         }
     }
 
-    free(cell_counts);
+    for (int t = 0; t < max_threads; t++) {
+        free(local_counts[t]);
+    }
+    free(local_counts);
     return cells;
 }
 
@@ -307,96 +319,76 @@ void update_positions_and_velocities(particle_t *par, long long n_part, double s
     double inv_cell_size = 1.0 / cell_size;
     long total_cells = ncside * ncside;
 
-    // **Step 1: Reset cell counts**
-    // Prepare the global cells array for new assignments by resetting counts.
-    #pragma omp parallel for
-    for (long i = 0; i < total_cells; i++) {
-        cells[i].count = 0;
+    // Thread-local counters
+    int **local_counts = malloc(max_threads * sizeof(int*));
+    for (int t = 0; t < max_threads; t++) {
+        local_counts[t] = calloc(total_cells, sizeof(int));
     }
 
-    // **Step 2: Allocate temporary array for counting particles per cell**
-    int *cell_counts = calloc(total_cells, sizeof(int));
-    if (!cell_counts) {
-        // Handle allocation failure if necessary
-        return;
-    }
+    #pragma omp parallel
+    {
+        int tid = omp_get_thread_num();
 
-    // **Step 3: Update positions and count particles per cell**
-    #pragma omp parallel for
-    for (long long i = 0; i < n_part; i++) {
-        // Update position using velocity and acceleration
-        par[i].x += par[i].vx * DELTAT + 0.5 * par[i].ax * DELTAT * DELTAT;
-        par[i].y += par[i].vy * DELTAT + 0.5 * par[i].ay * DELTAT * DELTAT;
+        // Reset cell counts and update positions
+        #pragma omp for
+        for (long i = 0; i < total_cells; i++) {
+            cells[i].count = 0;
+        }
 
-        // Apply periodic boundary conditions to keep particles within [0, side)
-        par[i].x = fmod(par[i].x, side);
-        if (par[i].x < 0) par[i].x += side;
-        par[i].y = fmod(par[i].y, side);
-        if (par[i].y < 0) par[i].y += side;
+        #pragma omp for
+        for (long long i = 0; i < n_part; i++) {
+            par[i].x += par[i].vx * DELTAT + 0.5 * par[i].ax * DELTAT * DELTAT;
+            par[i].y += par[i].vy * DELTAT + 0.5 * par[i].ay * DELTAT * DELTAT;
+            par[i].x = fmod(par[i].x, side);
+            if (par[i].x < 0) par[i].x += side;
+            par[i].y = fmod(par[i].y, side);
+            if (par[i].y < 0) par[i].y += side;
 
-        // Compute new cell coordinates
-        int new_x_cell = (int)floor(par[i].x * inv_cell_size);
-        int new_y_cell = (int)floor(par[i].y * inv_cell_size);
-        // Clamp to valid cell indices
-        if (new_x_cell >= ncside) new_x_cell = ncside - 1;
-        if (new_y_cell >= ncside) new_y_cell = ncside - 1;
-        int new_cell_index = new_y_cell * ncside + new_x_cell;
+            int new_x_cell = (int)floor(par[i].x * inv_cell_size);
+            int new_y_cell = (int)floor(par[i].y * inv_cell_size);
+            if (new_x_cell >= ncside) new_x_cell = ncside - 1;
+            if (new_y_cell >= ncside) new_y_cell = ncside - 1;
+            par[i].x_cell = new_x_cell;
+            par[i].y_cell = new_y_cell;
+            int new_cell_index = new_y_cell * ncside + new_x_cell;
+            local_counts[tid][new_cell_index]++;
+        }
 
-        // Store cell coordinates in particle for later use
-        par[i].x_cell = new_x_cell;
-        par[i].y_cell = new_y_cell;
-
-        // Atomically increment the count for this cell
-        #pragma omp atomic
-        cell_counts[new_cell_index]++;
-    }
-
-    // **Step 4: Reallocate cells[c].indices based on new counts**
-    for (long c = 0; c < total_cells; c++) {
-        free(cells[c].indices); // Free previous allocation
-        cells[c].capacity = cell_counts[c];
-        cells[c].count = cell_counts[c];
-        if (cells[c].capacity > 0) {
-            cells[c].indices = malloc(cells[c].capacity * sizeof(int));
-            if (!cells[c].indices) {
-                // Handle allocation failure if necessary
-                free(cell_counts);
-                return;
+        // Aggregate counts and allocate (single thread)
+        #pragma omp single
+        for (long c = 0; c < total_cells; c++) {
+            int total_count = 0;
+            for (int t = 0; t < max_threads; t++) {
+                total_count += local_counts[t][c];
             }
-        } else {
-            cells[c].indices = NULL;
+            free(cells[c].indices);
+            cells[c].capacity = total_count > 0 ? total_count : 1;
+            cells[c].count = 0;
+            cells[c].indices = malloc(cells[c].capacity * sizeof(int));
+        }
+
+        // Assign particles
+        #pragma omp for
+        for (long long i = 0; i < n_part; i++) {
+            int cell_index = par[i].y_cell * ncside + par[i].x_cell;
+            int pos;
+            #pragma omp atomic capture
+            pos = cells[cell_index].count++;
+            cells[cell_index].indices[pos] = i;
+        }
+
+        // Update velocities
+        #pragma omp for
+        for (long long i = 0; i < n_part; i++) {
+            par[i].vx += par[i].ax * DELTAT;
+            par[i].vy += par[i].ay * DELTAT;
         }
     }
 
-    // **Step 5: Initialize offsets for assigning particle indices**
-    int *cell_offset = calloc(total_cells, sizeof(int));
-    if (!cell_offset) {
-        // Handle allocation failure if necessary
-        free(cell_counts);
-        return;
+    for (int t = 0; t < max_threads; t++) {
+        free(local_counts[t]);
     }
-
-    // **Step 6: Assign particles to cells**
-    #pragma omp parallel for
-    for (long long i = 0; i < n_part; i++) {
-        int cell_index = par[i].y_cell * ncside + par[i].x_cell;
-        int pos;
-        // Atomically get the next available position in the cell's indices array
-        #pragma omp atomic capture
-        pos = cell_offset[cell_index]++;
-        cells[cell_index].indices[pos] = i;
-    }
-
-    // **Step 7: Clean up temporary arrays**
-    free(cell_counts);
-    free(cell_offset);
-
-    // **Step 8: Update velocities**
-    #pragma omp parallel for
-    for (long long i = 0; i < n_part; i++) {
-        par[i].vx += par[i].ax * DELTAT;
-        par[i].vy += par[i].ay * DELTAT;
-    }
+    free(local_counts);
 }
 
 void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n_part, long long *collision_count, double side, long long timestep) {
