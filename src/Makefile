@@ -1,4 +1,11 @@
-CC = gcc
+# Detect OS and set compiler accordingly
+UNAME := $(shell uname)
+ifeq ($(UNAME), Darwin)
+    CC = clang
+else
+    CC = gcc
+endif
+
 FLAGS = -O2 -fopenmp
 
 # Targets
