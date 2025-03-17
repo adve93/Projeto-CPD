@@ -1,12 +1,12 @@
 # Detect OS and set compiler accordingly
 UNAME := $(shell uname)
 ifeq ($(UNAME), Darwin)
-    CC = clang
+    CC = /opt/homebrew/opt/llvm/bin/clang  # Use Homebrew's Clang
+    FLAGS += -I/opt/homebrew/opt/llvm/include -L/opt/homebrew/opt/llvm/lib -fopenmp
 else
     CC = gcc
+    FLAGS += -fopenmp
 endif
-
-FLAGS = -O2 -fopenmp
 
 # Targets
 TARGET_SEQ = parsim
