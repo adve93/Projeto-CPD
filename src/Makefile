@@ -2,14 +2,14 @@
 UNAME := $(shell uname)
 ifeq ($(UNAME), Darwin)
     CC = /opt/homebrew/opt/llvm/bin/clang  # Use Homebrew's Clang
-    FLAGS += -I/opt/homebrew/opt/llvm/include -L/opt/homebrew/opt/llvm/lib -fopenmp
+    FLAGS += -I/opt/homebrew/opt/llvm/include -L/opt/homebrew/opt/llvm/lib -O2 -fopenmp
 else
     CC = gcc
-    FLAGS += -fopenmp
+    FLAGS += -O2 -fopenmp
 endif
 
 CC_MPI = mpicc
-CC_FLAGS_MPI = -g
+CC_FLAGS_MPI = -O2 -g
 
 # Targets
 TARGET_SEQ = parsim

@@ -19,17 +19,17 @@ typedef struct {
     int *indices;   // Dynamic array of particle indices in this cell
     int count;      // Number of particles in this cell
     int capacity;   // Capacity of the indices array
-    double x, y;    //Position of com
-    double m;       //Mass of com
+    double x, y;    // Position of com
+    double m;       // Mass of com
 } cell_t;
 
 void init_particles(long seed, double side, long ncside, long long n_part, particle_t *par);
-cell_t* assign_particles_and_build_cells(particle_t *par, long long n_part, long ncside, double cell_size);
-void free_cell_lists(cell_t *cells, long ncside);
-void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long ncside, double side);
-void update_positions_and_velocities(particle_t *par, long long n_part, double side, double cell_size, cell_t *cells, long ncside);
-void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n_part, long long *collision_count, double side, long long timestep);
-void run_time_step(particle_t *par, long long *n_part, long ncside, double side, double cell_side, long long *collision_count, long long timestep);
+cell_t* assign_particles_and_build_cells(particle_t *par, long long n_part, long ncside, double cell_size, double inv_cell_size, long total_cells);
+void free_cell_lists(cell_t *cells, long ncside, long total_cells);
+void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long ncside, double side, long total_cells);
+void update_positions_and_velocities(particle_t *par, cell_t *cells, long long n_part, long ncside, double side, double inv_cell_size, long total_cells);
+void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n_part, long long *collision_count, long total_cells, long long timestep);
+void run_time_step(particle_t *par, long long *n_part, long ncside, double side, double cell_side, double inv_cell_side, long total_cells, long long *collision_count, long long timestep);
 void print_particles(particle_t *par, long long n_part);
 void print_cells(cell_t *cells, long ncside);
 

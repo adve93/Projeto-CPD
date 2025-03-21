@@ -1,0 +1,29 @@
+# AMPLXE_PERF_STAT
+# hostname : lab1p1
+# os release : 6.6.76
+# arch : x86_64
+# cpuid : GenuineIntel,6,158,9
+# cpudesc : Intel(R) Core(TM) i5-7500 CPU @ 3.40GHz
+# total memory : 16229384 kB
+# nrcpus online : 4
+# nrcpus avail : 4
+# sibling cores : 0-3
+# sibling threads : 0
+# sibling threads : 1
+# sibling threads : 2
+# sibling threads : 3
+# process id : 378462
+;;1877867266702;0
+;;1781857136122;1
+;;3514084110834;2
+;;12548226834;3
+;;12548264551;4
+;;6;5
+;;17;6
+;;0;7
+;;728118617163;8
+;;390340002021;9
+;;1;10
+;;1982809264;11
+;;3468781792089;12
+;;3164285040767;13
