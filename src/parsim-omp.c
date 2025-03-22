@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <omp.h>
-#include "header.h"
+#include "header-omp.h"
 
 #define _USE_MATH_DEFINES
 #define G 6.67408e-11

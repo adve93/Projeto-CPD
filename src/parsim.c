@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <omp.h>
-#include "header.h"
+#include "header-seq.h"
 
 #define _USE_MATH_DEFINES
 #define G 6.67408e-11
@@ -158,7 +158,7 @@ cell_t* assign_particles_and_build_cells(particle_t *par, long long n_part, long
         int y_cell = (int)(par[i].y * inv_cell_size );
         par[i].x_cell = x_cell;
         par[i].y_cell = y_cell;
-        // Reset acceleration for each time step
+        // Reset acceleration of each particle for each time step
         par[i].ax = 0;
         par[i].ay = 0;
         int cell_index = y_cell * ncside + x_cell;
