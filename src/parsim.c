@@ -90,10 +90,12 @@ int main(int argc, char *argv[]) {
     exec_time = -omp_get_wtime();
 
     long long collision_count = 0;
+    cell_t *cells = init_cells(total_cells, n_part, ncside, inv_cell_side, particles_arr);
     for (long long t = 0; t < time_steps; t++) {
-        // printf("Time step %lld\n", t);
-        run_time_step(particles_arr, &n_part, ncside, side, cell_side, inv_cell_side, total_cells, &collision_count, t);
+        printf("Time step %lld\n", t);
+        run_time_step(particles_arr, &n_part, ncside, side, cell_side, inv_cell_side, total_cells, &collision_count, t, cells);
     }
+    free_cell_lists(cells, ncside, total_cells);
     // print_particles(particles_arr, n_part);
 
     exec_time += omp_get_wtime();
@@ -111,11 +113,11 @@ int main(int argc, char *argv[]) {
 ///////////////////////////////////////
 
 // Run one simulation time step using spatial partitioning
-void run_time_step(particle_t *par, long long *n_part, long ncside, double side, double cell_side, double inv_cell_side, long total_cells, long long *collision_count, long long timestep) {
+void run_time_step(particle_t *par, long long *n_part, long ncside, double side, double cell_side, double inv_cell_side, long total_cells, long long *collision_count, long long timestep, cell_t *cells) {
     // Print particle positions
     //print_particles(par, *n_part);
     // 1. Combined cell assignment and cell list build.
-    cell_t *cells = assign_particles_and_build_cells(par, *n_part, ncside, cell_side, inv_cell_side, total_cells);
+    assign_particles_and_build_cells(par, *n_part, ncside, cell_side, inv_cell_side, total_cells, cells);
     // Print COM for each cell
     //print_cells(cells, ncside);
     // 3. Compute forces using spatial partitioning: same-cell and adjacent cells
@@ -125,21 +127,19 @@ void run_time_step(particle_t *par, long long *n_part, long ncside, double side,
     // 5. Detect collisions (check only within the same cell)
     detect_collisions(cells, par, ncside, n_part, collision_count, total_cells, timestep);
     // Free cell lists for this time step
-    free_cell_lists(cells, ncside, total_cells);
+    //free_cell_lists(cells, ncside, total_cells);
 }
 
 ///////////////////////////////////////
 // Spatial Partitioning Structures and Functions
 ///////////////////////////////////////
 
-// Combined function: assign each particle to a cell and build cell lists.
-cell_t* assign_particles_and_build_cells(particle_t *par, long long n_part, long ncside, double cell_size, double inv_cell_size, long total_cells) {
+cell_t* init_cells(long total_cells, long long n_part, long ncside, double inv_cell_size, particle_t *par) {
     cell_t *cells = malloc(total_cells * sizeof(cell_t));
     if (!cells) {
         fprintf(stderr, "Memory allocation failed for cell lists.\n");
         exit(1);
     }
-    // Initialize each cell with a small capacity.
     for (long i = 0; i < total_cells; i++) {
         cells[i].capacity = 1000;
         cells[i].count = 0;
@@ -152,7 +152,7 @@ cell_t* assign_particles_and_build_cells(particle_t *par, long long n_part, long
         cells[i].y = 0;
         cells[i].m = 0;
     }
-    // Loop over particles once: assign cell indices and add to corresponding cell list.
+
     for (long long i = 0; i < n_part; i++) {
         int x_cell = (int)(par[i].x * inv_cell_size );
         int y_cell = (int)(par[i].y * inv_cell_size );
@@ -173,12 +173,27 @@ cell_t* assign_particles_and_build_cells(particle_t *par, long long n_part, long
         }
     
         cells[cell_index].indices[cells[cell_index].count++] = i;
-        cells[cell_index].x += par[i].x * par[i].m;
-        cells[cell_index].y += par[i].y * par[i].m;
-        cells[cell_index].m += par[i].m;
-    }
 
+    }
+    return cells;
+}
+
+// Combined function: assign each particle to a cell and build cell lists.
+cell_t* assign_particles_and_build_cells(particle_t *par, long long n_part, long ncside, double cell_size, double inv_cell_size, long total_cells, cell_t *cells) {
+
+    //Reset cell COMs and masses
     for (long i = 0; i < total_cells; i++) {
+        cells[i].x = 0;
+        cells[i].y = 0;
+        cells[i].m = 0;
+
+        for(long long j = 0; j < cells[i].count; j++) {
+            int idx = cells[i].indices[j];
+            cells[i].x += par[idx].x * par[idx].m;
+            cells[i].y += par[idx].y * par[idx].m;
+            cells[i].m += par[idx].m;
+        }
+
         if (cells[i].m > 0) {
             cells[i].x /= cells[i].m;
             cells[i].y /= cells[i].m;
