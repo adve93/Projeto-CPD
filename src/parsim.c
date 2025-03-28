@@ -108,32 +108,6 @@ int main(int argc, char *argv[]) {
     return 0;
 }
 
-///////////////////////////////////////
-// Run time pipeline
-///////////////////////////////////////
-
-// Run one simulation time step using spatial partitioning
-void run_time_step(particle_t *par, long long *n_part, long ncside, double side, double cell_side, double inv_cell_side, long total_cells, long long *collision_count, long long timestep, cell_t *cells) {
-    // Print particle positions
-    //print_particles(par, *n_part);
-    // 1. Combined cell assignment and cell list build.
-    assign_particles_and_build_cells(par, *n_part, ncside, cell_side, inv_cell_side, total_cells, cells);
-    // Print COM for each cell
-    //print_cells(cells, ncside);
-    // 3. Compute forces using spatial partitioning: same-cell and adjacent cells
-    calculate_forces(par, cells, n_part, ncside, side, total_cells);
-    // 4. Update positions and velocities
-    update_positions_and_velocities(par, cells, *n_part, ncside, side, inv_cell_side, total_cells);
-    // 5. Detect collisions (check only within the same cell)
-    detect_collisions(cells, par, ncside, n_part, collision_count, total_cells, timestep);
-    // Free cell lists for this time step
-    //free_cell_lists(cells, ncside, total_cells);
-}
-
-///////////////////////////////////////
-// Spatial Partitioning Structures and Functions
-///////////////////////////////////////
-
 cell_t* init_cells(long total_cells, long long n_part, long ncside, double inv_cell_size, particle_t *par) {
     cell_t *cells = malloc(total_cells * sizeof(cell_t));
     if (!cells) {
@@ -178,8 +152,41 @@ cell_t* init_cells(long total_cells, long long n_part, long ncside, double inv_c
     return cells;
 }
 
+void free_cell_lists(cell_t *cells, long ncside, long total_cells) {
+    for (long i = 0; i < total_cells; i++) {
+        free(cells[i].indices);
+    }
+    free(cells);
+}
+
+///////////////////////////////////////
+// Run time pipeline
+///////////////////////////////////////
+
+// Run one simulation time step using spatial partitioning
+void run_time_step(particle_t *par, long long *n_part, long ncside, double side, double cell_side, double inv_cell_side, long total_cells, long long *collision_count, long long timestep, cell_t *cells) {
+    // Print particle positions
+    print_particles(par, *n_part);
+    // 1. Combined cell assignment and cell list build.
+    assign_particles_and_build_cells(par, *n_part, ncside, cell_side, inv_cell_side, total_cells, cells);
+    // Print COM for each cell
+    //print_cells(cells, ncside);
+    // 3. Compute forces using spatial partitioning: same-cell and adjacent cells
+    calculate_forces(par, cells, n_part, ncside, side, total_cells);
+    // 4. Update positions and velocities
+    update_positions_and_velocities(par, cells, *n_part, ncside, side, inv_cell_side, total_cells);
+    // 5. Detect collisions (check only within the same cell)
+    detect_collisions(cells, par, ncside, n_part, collision_count, total_cells, timestep);
+    // Free cell lists for this time step
+    //free_cell_lists(cells, ncside, total_cells);
+}
+
+///////////////////////////////////////
+// Spatial Partitioning Structures and Functions
+///////////////////////////////////////
+
 // Combined function: assign each particle to a cell and build cell lists.
-cell_t* assign_particles_and_build_cells(particle_t *par, long long n_part, long ncside, double cell_size, double inv_cell_size, long total_cells, cell_t *cells) {
+void assign_particles_and_build_cells(particle_t *par, long long n_part, long ncside, double cell_size, double inv_cell_size, long total_cells, cell_t *cells) {
 
     //Reset cell COMs and masses
     for (long i = 0; i < total_cells; i++) {
@@ -199,15 +206,6 @@ cell_t* assign_particles_and_build_cells(particle_t *par, long long n_part, long
             cells[i].y /= cells[i].m;
         }
     }
-
-    return cells;
-}
-
-void free_cell_lists(cell_t *cells, long ncside, long total_cells) {
-    for (long i = 0; i < total_cells; i++) {
-        free(cells[i].indices);
-    }
-    free(cells);
 }
 
 ///////////////////////////////////////
@@ -217,6 +215,12 @@ void free_cell_lists(cell_t *cells, long ncside, long total_cells) {
 
 // Calculate forces on each particle using spatial partitioning,
 void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long ncside, double side, long total_cells) {
+
+    // Reset accelerations
+    for (long long i = 0; i < *n_part; i++) {
+        par[i].ax = 0;
+        par[i].ay = 0;
+    }
 
     // 1. Compute same-cell interactions using each unique pair only once.
     for (long cell = 0; cell < total_cells; cell++) {
@@ -242,7 +246,9 @@ void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long nc
                 par[j].ay -= fy / par[j].m;
 
                 // Debug print for same-cell interactions
-                //printf("P%d/P%d mag: %.6f fx: %.6f fy: %.6f\n", i, j, force, fx, fy);
+                if(i == 0) {
+                    printf("P%d/P%d mag: %.6f fx: %.6f fy: %.6f\n", i, j, force, fx, fy);
+                }
             }
         }
     }
@@ -298,8 +304,9 @@ void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long nc
             par[i].ax += fx_cm / par[i].m;
             par[i].ay += fy_cm / par[i].m;
 
-            //printf("P%d/C%d mag: %.6f fx: %.6f fy: %.6f\n", i, neighbor_index, force_cm, fx_cm, fy_cm);
-            
+            if(i == 0) {
+                printf("P%d/C%d mag: %.6f fx: %.6f fy: %.6f\n", i, neighbor_index, force_cm, fx_cm, fy_cm);
+            }   
         }
     }
 }
@@ -307,12 +314,12 @@ void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long nc
 // Combined function to update positions and velocities in one loop.
 void update_positions_and_velocities(particle_t *par, cell_t *cells, long long n_part, long ncside, double side, double inv_cell_size, long total_cells) {
 
-    // Reset cell counts before updating
-    for (long i = 0; i < total_cells; i++) {
-        cells[i].count = 0;
-    }
-
     for (long long i = 0; i < n_part; i++) {
+        // Store previous cell index
+        int prev_x_cell = par[i].x_cell;
+        int prev_y_cell = par[i].y_cell;
+        int prev_cell_index = prev_y_cell * ncside + prev_x_cell;
+
         // Update positions
         par[i].x += par[i].vx * DELTAT + 0.5 * par[i].ax * DELTAT * DELTAT;
         par[i].y += par[i].vy * DELTAT + 0.5 * par[i].ay * DELTAT * DELTAT;
@@ -335,22 +342,37 @@ void update_positions_and_velocities(particle_t *par, cell_t *cells, long long n
         // Compute new cell index
         int new_cell_index = new_y_cell * ncside + new_x_cell;
 
-        // Update particle cell assignment
-        par[i].x_cell = new_x_cell;
-        par[i].y_cell = new_y_cell;
+        // Remove particle from old cell if it changed and add to new one
+        if (new_cell_index != prev_cell_index) {
+            int *indices = cells[prev_cell_index].indices;
+            int count = cells[prev_cell_index].count;
 
-        // Ensure the cell has enough space
-        if (cells[new_cell_index].count == cells[new_cell_index].capacity) {
-            cells[new_cell_index].capacity *= 2;
-            cells[new_cell_index].indices = realloc(cells[new_cell_index].indices, cells[new_cell_index].capacity * sizeof(int));
-            if (!cells[new_cell_index].indices) {
-                fprintf(stderr, "Memory reallocation failed for cell indices.\n");
-                exit(1);
+            // Find and remove the particle from the old cell
+            for (int j = 0; j < count; j++) {
+                if (indices[j] == i) {
+                    indices[j] = indices[count - 1]; // Swap with last element
+                    cells[prev_cell_index].count--; // Reduce count
+                    break;
+                }
             }
-        }
 
-        // Add particle to the new cell
-        cells[new_cell_index].indices[cells[new_cell_index].count++] = i;
+            // Update particle cell assignment
+            par[i].x_cell = new_x_cell;
+            par[i].y_cell = new_y_cell;
+
+            // Ensure the cell has enough space
+            if (cells[new_cell_index].count == cells[new_cell_index].capacity) {
+                cells[new_cell_index].capacity *= 2;
+                cells[new_cell_index].indices = realloc(cells[new_cell_index].indices, cells[new_cell_index].capacity * sizeof(int));
+                if (!cells[new_cell_index].indices) {
+                    fprintf(stderr, "Memory reallocation failed for cell indices.\n");
+                    exit(1);
+                }
+            }
+
+            // Add particle to the new cell
+            cells[new_cell_index].indices[cells[new_cell_index].count++] = i;
+        }  
 
         // Update velocities
         par[i].vx += par[i].ax * DELTAT;
@@ -358,6 +380,7 @@ void update_positions_and_velocities(particle_t *par, cell_t *cells, long long n
     }
 }
 
+/*
 void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n_part, long long *collision_count, long total_cells, long long timestep) {
     int *marked_for_removal = calloc(*n_part, sizeof(int)); // Track particles for deletion
     if (!marked_for_removal) {
@@ -369,6 +392,7 @@ void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n
     for (long cell = 0; cell < total_cells; cell++) {
         cell_t current = cells[cell];
         if (current.count < 2) continue; // No collision possible
+
         // Iterate over all particles in the cell
         for (int i = 0; i < current.count; i++) {
             int idx_i = current.indices[i];
@@ -419,6 +443,16 @@ void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n
                 }
             }
         }
+
+        // Remove marked particles from the cell's index list
+        int new_count = 0;
+        for (int i = 0; i < current.count; i++) {
+            int idx = current.indices[i];
+            if (!marked_for_removal[idx]) {
+                current.indices[new_count++] = idx; // Keep non-collided particles
+            }
+        }
+        current.count = new_count; // Update the number of particles in the cell
     }
 
     // Compact the particle array (remove collided particles)
@@ -432,6 +466,91 @@ void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n
 
     free(marked_for_removal);
 }
+*/
+
+
+void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n_part, long long *collision_count, long total_cells, long long timestep) {
+    int *marked_for_removal = calloc(*n_part, sizeof(int)); // Track particles for deletion
+    if (!marked_for_removal) {
+        fprintf(stderr, "Memory allocation failed.\n");
+        exit(1);
+    }
+
+    // Loop through all cells
+    for (long cell = 0; cell < total_cells; cell++) {
+        cell_t current = cells[cell];
+        if (current.count < 2) continue; // No collision possible
+
+        // Iterate over all particles in the cell
+        for (int i = 0; i < current.count; i++) {
+            int idx_i = current.indices[i];
+            //if (marked_for_removal[idx_i]) continue; // Already removed
+
+            int group_size = 1; // Start tracking a collision group
+
+            for (int j = i + 1; j < current.count; j++) {
+                int idx_j = current.indices[j];
+                //if (marked_for_removal[idx_j]) continue;
+
+                double dx = par[idx_j].x - par[idx_i].x;
+                double dy = par[idx_j].y - par[idx_i].y;
+                double dist2 = dx * dx + dy * dy;
+
+                if (dist2 <  EPSILON2) { // Collision detected
+                    printf("Collision %lld: P%d/P%d\n", *collision_count, idx_i, idx_j);
+
+                    marked_for_removal[idx_j] = 1;
+                    group_size++;
+
+                    if (group_size == 2) {
+                        marked_for_removal[idx_i] = 1; // Mark the first particle
+                    }
+
+                    if (group_size == 3) break;
+
+                    (*collision_count)++;
+                    
+                }
+            }
+        }
+
+        /*
+        // Remove marked particles from the cell's index list
+        int new_count = 0;
+        for (int i = 0; i < current.count; i++) {
+            int idx = current.indices[i];
+            if (!marked_for_removal[idx]) {
+                current.indices[new_count++] = idx; // Keep non-collided particles
+            }
+        }
+        */
+
+        for (int j = 0; j < current.count; j++) {
+            int idx = current.indices[j];
+            if (marked_for_removal[idx]) {
+                current.indices[idx] = current.indices[current.count - 1]; // Swap with last element
+                current.count--; // Reduce count
+                break;
+            }
+        }
+
+        /*
+        current.count = new_count; // Update the number of particles in the cell
+        */
+    }
+
+    // Compact the particle array (remove collided particles)
+    long long new_n_part = 0;
+    for (long long i = 0; i < *n_part; i++) {
+        if (!marked_for_removal[i]) {
+            par[new_n_part++] = par[i]; // Keep valid particles
+        }
+    }
+    *n_part = new_n_part;
+
+    free(marked_for_removal);
+}
+
 
 void print_particles(particle_t *par, long long n_part) {
     for (int i = 0; i < n_part; i++) {

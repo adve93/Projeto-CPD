@@ -25,7 +25,7 @@ typedef struct {
 
 cell_t* init_cells(long total_cells, long long n_part, long ncside, double inv_cell_size, particle_t *par);
 void init_particles(long seed, double side, long ncside, long long n_part, particle_t *par);
-cell_t* assign_particles_and_build_cells(particle_t *par, long long n_part, long ncside, double cell_size, double inv_cell_size, long total_cells, cell_t *cells);
+void assign_particles_and_build_cells(particle_t *par, long long n_part, long ncside, double cell_size, double inv_cell_size, long total_cells, cell_t *cells);
 void free_cell_lists(cell_t *cells, long ncside, long total_cells);
 void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long ncside, double side, long total_cells);
 void update_positions_and_velocities(particle_t *par, cell_t *cells, long long n_part, long ncside, double side, double inv_cell_size, long total_cells);
