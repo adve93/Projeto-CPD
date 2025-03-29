@@ -557,59 +557,57 @@ void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n
                         (*collision_count)++;
                         collision_detected = 1;
                     }
-
-                    break;
+                    
                 }
             }
         }
 
-        // Step 2: Remove marked particles from the cell's index list
+        // Step 2: Compact cell index lists by removing particles marked for removal.
         int new_count = 0;
         for (int i = 0; i < cells[cell].count; i++)
         {
             int idx = cells[cell].indices[i];
             if (!marked_for_removal[idx])
             {
+                // Keep unmarked (surviving) particles.
                 cells[cell].indices[new_count++] = idx;
             }
         }
         cells[cell].count = new_count;
     }
 
-    // Step 3: Compact particle array and create index mapping
-    int *new_index = malloc(*n_part * sizeof(int));
-    if (!new_index)
-    {
-        fprintf(stderr, "Memory allocation failed for new_index.\n");
-        exit(1);
-    }
-
+    // Step 3: Compact the particle array and update the mapping in-place.
+    // We'll reuse marked_for_removal to store the new index for each surviving particle.
+    long long original_n = *n_part;
     long long new_n_part = 0;
-    for (long long i = 0; i < *n_part; i++)
+    for (long long i = 0; i < original_n; i++)
     {
         if (!marked_for_removal[i])
         {
+            // Particle survives: its new index is the next available slot.
             par[new_n_part] = par[i];
-            new_index[i] = new_n_part;
+            // Overwrite the removal flag with the new index.
+            marked_for_removal[i] = new_n_part;
             new_n_part++;
         }
         else
         {
-            new_index[i] = -1;
+            // Particle was removed; mark mapping as invalid.
+            marked_for_removal[i] = -1;
         }
     }
     *n_part = new_n_part;
 
-    // Step 4: Update cell indices with new positions
+    // Step 4: Update cell index lists using the new index mapping stored in marked_for_removal.
     for (long cell = 0; cell < total_cells; cell++)
     {
         for (int i = 0; i < cells[cell].count; i++)
         {
-            cells[cell].indices[i] = new_index[cells[cell].indices[i]];
+            int old_idx = cells[cell].indices[i];
+            cells[cell].indices[i] = marked_for_removal[old_idx];
         }
     }
 
-    free(new_index);
     free(marked_for_removal);
 }
 
