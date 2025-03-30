@@ -2,7 +2,7 @@
 UNAME := $(shell uname)
 ifeq ($(UNAME), Darwin)
     CC = /opt/homebrew/opt/llvm/bin/clang  # Use Homebrew's Clang
-    FLAGS += -I/opt/homebrew/opt/llvm/include -L/opt/homebrew/opt/llvm/lib -O2 -fopenmp
+    FLAGS += -O2 -fopenmp
 else
     CC = gcc
     FLAGS += -O2 -fopenmp

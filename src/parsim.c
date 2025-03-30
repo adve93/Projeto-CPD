@@ -8,7 +8,6 @@
 #define G 6.67408e-11
 #define EPSILON2 (0.005 * 0.005)
 #define DELTAT 0.1
-#define M_PI 3.14159265358979323846
 
 ///////////////////////////////////////
 // Random and Initialization Functions
@@ -83,27 +82,31 @@ int main(int argc, char *argv[])
     long long n_part = atoll(argv[4]);     // Number of particles
     long long time_steps = atoll(argv[5]); // Number of time steps
 
+    // Allocate memory for particles and cells
     particle_t *particles_arr = malloc(n_part * sizeof(particle_t));
-    if (!particles_arr)
-    {
+    if (!particles_arr) {
         fprintf(stderr, "Memory allocation failed for particles.\n");
         return 1;
     }
+
+    // Calculate cell side length
     const double cell_side = side / ncside;
     const double inv_cell_side = 1.0 / cell_side;
-    const long total_cells = ncside * ncside;
+    // Calculate total number of cells
+    long total_cells = ncside * ncside;
+
     init_particles(seed, side, ncside, n_part, particles_arr);
+
+    cell_t *cells = init_cells(particles_arr, total_cells, n_part, ncside, inv_cell_side);
+    
     exec_time = -omp_get_wtime();
 
     long long collision_count = 0;
-    cell_t *cells = init_cells(total_cells, n_part, ncside, inv_cell_side, particles_arr);
+    
     for (long long t = 0; t < time_steps; t++)
     {
-        printf("Time step %lld\n", t);
         run_time_step(particles_arr, &n_part, ncside, side, cell_side, inv_cell_side, total_cells, &collision_count, t, cells);
     }
-    free_cell_lists(cells, ncside, total_cells);
-    // print_particles(particles_arr, n_part);
 
     exec_time += omp_get_wtime();
 
@@ -111,11 +114,12 @@ int main(int argc, char *argv[])
     printf("%lld\n", collision_count);
     fprintf(stderr, "%.1fs\n", exec_time);
 
+    free_cell_lists(cells, ncside, total_cells);
     free(particles_arr);
     return 0;
 }
 
-cell_t *init_cells(long total_cells, long long n_part, long ncside, double inv_cell_size, particle_t *par)
+cell_t *init_cells(particle_t *par, long total_cells, long long n_part, long ncside, double inv_cell_size)
 {
     cell_t *cells = malloc(total_cells * sizeof(cell_t));
     if (!cells)
@@ -144,9 +148,6 @@ cell_t *init_cells(long total_cells, long long n_part, long ncside, double inv_c
         int y_cell = (int)(par[i].y * inv_cell_size);
         par[i].x_cell = x_cell;
         par[i].y_cell = y_cell;
-        // Reset acceleration of each particle for each time step
-        par[i].ax = 0;
-        par[i].ay = 0;
         int cell_index = y_cell * ncside + x_cell;
 
         if (cells[cell_index].count == cells[cell_index].capacity)
@@ -181,20 +182,14 @@ void free_cell_lists(cell_t *cells, long ncside, long total_cells)
 // Run one simulation time step using spatial partitioning
 void run_time_step(particle_t *par, long long *n_part, long ncside, double side, double cell_side, double inv_cell_side, long total_cells, long long *collision_count, long long timestep, cell_t *cells)
 {
-    // Print particle positions
-    // print_particles(par, *n_part);
     // 1. Combined cell assignment and cell list build.
     assign_particles_and_build_cells(par, *n_part, ncside, cell_side, inv_cell_side, total_cells, cells);
-    // Print COM for each cell
-    // print_cells(cells, ncside);
-    // 3. Compute forces using spatial partitioning: same-cell and adjacent cells
+    // 2. Compute forces using spatial partitioning: same-cell and adjacent cells
     calculate_forces(par, cells, n_part, ncside, side, total_cells);
-    // 4. Update positions and velocities
+    // 3. Update positions and velocities
     update_positions_and_velocities(par, cells, *n_part, ncside, side, inv_cell_side, total_cells);
-    // 5. Detect collisions (check only within the same cell)
+    // 4. Detect collisions (check only within the same cell)
     detect_collisions(cells, par, ncside, n_part, collision_count, total_cells, timestep);
-    // Free cell lists for this time step
-    // free_cell_lists(cells, ncside, total_cells);
 }
 
 ///////////////////////////////////////
@@ -352,7 +347,7 @@ void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long nc
 void update_positions_and_velocities(particle_t *par, cell_t *cells, long long n_part, long ncside, double side, double inv_cell_size, long total_cells)
 {
 
-    for (long long i = 0; i < n_part; i++)
+    for (long long i = 0; i < n_part; i++) 
     {
         // Store previous cell index
         int prev_x_cell = par[i].x_cell;
