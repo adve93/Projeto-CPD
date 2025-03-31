@@ -97,7 +97,7 @@ int main(int argc, char *argv[])
 
     init_particles(seed, side, ncside, n_part, particles_arr);
 
-    cell_t *cells = init_cells(particles_arr, total_cells, n_part, ncside, inv_cell_side);
+    cell_t *cells = init_cells(particles_arr, total_cells, n_part, ncside, cell_side);
     
     exec_time = -omp_get_wtime();
 
@@ -119,50 +119,75 @@ int main(int argc, char *argv[])
     return 0;
 }
 
-cell_t *init_cells(particle_t *par, long total_cells, long long n_part, long ncside, double inv_cell_size)
+cell_t *init_cells(particle_t *par, long total_cells, long long n_part, long ncside, double cell_side)
 {
-    cell_t *cells = malloc(total_cells * sizeof(cell_t));
-    if (!cells)
-    {
-        fprintf(stderr, "Memory allocation failed for cell lists.\n");
-        exit(1);
+    // Step 1: Count initial particles per cell
+    long long *cell_counts = calloc(total_cells, sizeof(long long));
+    if (!cell_counts) {
+        fprintf(stderr, "Memory allocation failed for cell_counts.\n");
+        free(par);
+        return NULL;
     }
-    for (long i = 0; i < total_cells; i++)
-    {
-        cells[i].capacity = 1000;
-        cells[i].count = 0;
+
+    for (long long i = 0; i < n_part; i++) {
+        int x_cell = (int)(par[i].x / cell_side);
+        int y_cell = (int)(par[i].y / cell_side);
+        // Ensure indices are within bounds
+        x_cell = (x_cell + ncside) % ncside;
+        y_cell = (y_cell + ncside) % ncside;
+        int cell_index = y_cell * ncside + x_cell;
+        cell_counts[cell_index]++;
+    }
+
+    // Step 2: Allocate memory for cells
+    cell_t *cells = malloc(total_cells * sizeof(cell_t));
+    if (!cells) {
+        fprintf(stderr, "Memory allocation failed for cells.\n");
+        free(cell_counts);
+        free(par);
+        return NULL;
+    }
+
+    // Define a buffer for extra capacity
+    const long long buffer = 1000;
+
+    // Step 3: Set capacities and allocate indices arrays
+    for (long i = 0; i < total_cells; i++) {
+        cells[i].capacity = cell_counts[i] + buffer;
         cells[i].indices = malloc(cells[i].capacity * sizeof(int));
-        if (!cells[i].indices)
-        {
-            fprintf(stderr, "Memory allocation failed for cell indices.\n");
-            exit(1);
+        if (!cells[i].indices) {
+            fprintf(stderr, "Memory allocation failed for cell indices at cell %ld.\n", i);
+            // Free previously allocated memory to avoid leaks
+            for (long j = 0; j < i; j++) {
+                free(cells[j].indices);
+            }
+            free(cells);
+            free(cell_counts);
+            free(par);
+            return NULL;
         }
+        cells[i].count = 0;  // Initialize count to 0; will be incremented later
         cells[i].x = 0;
         cells[i].y = 0;
         cells[i].m = 0;
     }
 
-    for (long long i = 0; i < n_part; i++)
-    {
-        int x_cell = (int)(par[i].x * inv_cell_size);
-        int y_cell = (int)(par[i].y * inv_cell_size);
+    // Step 4: Populate indices arrays
+    for (long long i = 0; i < n_part; i++) {
+        int x_cell = (int)(par[i].x / cell_side);
+        int y_cell = (int)(par[i].y / cell_side);
         par[i].x_cell = x_cell;
         par[i].y_cell = y_cell;
+        x_cell = (x_cell + ncside) % ncside;
+        y_cell = (y_cell + ncside) % ncside;
         int cell_index = y_cell * ncside + x_cell;
-
-        if (cells[cell_index].count == cells[cell_index].capacity)
-        {
-            cells[cell_index].capacity *= 2;
-            cells[cell_index].indices = realloc(cells[cell_index].indices, cells[cell_index].capacity * sizeof(int));
-            if (!cells[cell_index].indices)
-            {
-                fprintf(stderr, "Memory reallocation failed for cell indices.\n");
-                exit(1);
-            }
-        }
-
-        cells[cell_index].indices[cells[cell_index].count++] = i;
+        // Assign particle index to the cell's indices array
+        cells[cell_index].indices[cells[cell_index].count] = i;
+        cells[cell_index].count++;  // Increment the count
     }
+
+    // Step 5: Free temporary array and return
+    free(cell_counts);
     return cells;
 }
 
@@ -400,18 +425,6 @@ void update_positions_and_velocities(particle_t *par, cell_t *cells, long long n
             // Update particle cell assignment
             par[i].x_cell = new_x_cell;
             par[i].y_cell = new_y_cell;
-
-            // Ensure the cell has enough space
-            if (cells[new_cell_index].count == cells[new_cell_index].capacity)
-            {
-                cells[new_cell_index].capacity *= 2;
-                cells[new_cell_index].indices = realloc(cells[new_cell_index].indices, cells[new_cell_index].capacity * sizeof(int));
-                if (!cells[new_cell_index].indices)
-                {
-                    fprintf(stderr, "Memory reallocation failed for cell indices.\n");
-                    exit(1);
-                }
-            }
 
             // Add particle to the new cell
             cells[new_cell_index].indices[cells[new_cell_index].count++] = i;
