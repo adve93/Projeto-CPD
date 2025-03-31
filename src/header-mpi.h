@@ -24,6 +24,12 @@ typedef struct {
 } cell_t;
 
 void init_particles(long seed, double side, long ncside, long long n_part, particle_t *par);
+void print_process_cell_assignment(int rank, int size, long ncside, int side, int start_row, int end_row);
+void print_local_particles(int rank, int size, particle_t *par, long long n_part, int inv_cell_side);
+void get_local_domain(int rank, int size, int ncside, int *start_row, int *end_row);
+void initialize_and_distribute_cells(int rank, int size, long ncside, cell_t *local_cells);
+void initialize_and_distribute_particles(int rank, int size, long ncside, double side, long long n_part_total, particle_t *local_particles, int inv_cell_side, long long local_n_part);
+
 cell_t* assign_particles_and_build_cells(particle_t *par, long long n_part, long ncside, double cell_size, double inv_cell_size, long total_cells);
 void free_cell_lists(cell_t *cells, long ncside, long total_cells);
 void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long ncside, double side, long total_cells);
