@@ -63,22 +63,7 @@ void init_particles(long userseed, double side, long ncside, long long n_part, p
         par[i].vy = (rnd01() - 0.5) * side / ncside / 5.0;
 
         par[i].m = rnd01() * 0.01 * (ncside * ncside) / n_part / G * EPSILON2;
-    }
-}
-
-///////////////////////////////////////
-// MPI Helper Functions
-///////////////////////////////////////
-
-// New function: determine local domain bounds for a process.
-void get_local_domain(int rank, int size, int ncside, int *start_row, int *end_row) {
-    // Divide ncside rows as evenly as possible among all processes.
-    int rows_per_proc = ncside / size;
-    int extra = ncside % size;
-    *start_row = rank * rows_per_proc + (rank < extra ? rank : extra);
-    *end_row = *start_row + rows_per_proc - 1;
-    if (rank < extra) {
-        (*end_row)++;
+        par[i].global_id = i;
     }
 }
 
@@ -111,7 +96,12 @@ int main(int argc, char *argv[])
     const double inv_cell_side = 1.0 / cell_side;
     const long total_cells = ncside * ncside;
 
-    // Determine which rows of cells this process will manage.
+    cell_t *local_cells = NULL;
+    //initialize_and_distribute_cells(rank, size, ncside, local_cells);
+
+    ////////////////////////////////////////////////////////////
+    ////////////Initialize And Distribute Cells/////////////////
+    ////////////////////////////////////////////////////////////
     int start_row, end_row;
     get_local_domain(rank, size, ncside, &start_row, &end_row);
     int local_rows = end_row - start_row + 1;
@@ -121,7 +111,7 @@ int main(int argc, char *argv[])
     //print_process_cell_assignment(rank, size, ncside, side, start_row, end_row);
 
     // Allocate local cells (only for the rows this process owns).
-    cell_t *local_cells = malloc(local_total_cells * sizeof(cell_t));
+    local_cells = malloc(local_total_cells * sizeof(cell_t));
     if (!local_cells) {
         fprintf(stderr, "Process %d: Memory allocation failed for local cells.\n", rank);
         MPI_Abort(MPI_COMM_WORLD, 1);
@@ -139,6 +129,11 @@ int main(int argc, char *argv[])
         local_cells[i].y = 0;
         local_cells[i].m = 0;
     }
+
+
+    ////////////////////////////////////////////////////////////
+    ////////////Initialize And Distribute Particles/////////////
+    ////////////////////////////////////////////////////////////
 
     particle_t *local_particles = NULL;
     long long local_n_part = 0;
@@ -228,113 +223,18 @@ int main(int argc, char *argv[])
         }
         MPI_Recv(local_particles, local_n_part * sizeof(particle_t), MPI_BYTE, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     }
+    
+    //print_local_particles(rank, size, local_particles, local_n_part, inv_cell_side);
 
-    print_local_particles(rank, size, local_particles, local_n_part, inv_cell_side);
-    free(local_cells);
 
-    MPI_Finalize();
-}
-
-    /*
-
-    particle_t *local_particles = NULL;
-    long long local_n_part = 0;
-
-    if(rank == 0) {
-        // Process 0 initializes the full particle array.
-        particle_t *particles_arr = malloc(n_part_total * sizeof(particle_t));
-        if (!particles_arr) {
-            fprintf(stderr, "Memory allocation failed for particles.\n");
-            MPI_Abort(MPI_COMM_WORLD, 1);
-        }
-        init_particles(seed, side, ncside, n_part_total, particles_arr);
-
-        // *** Domain Decomposition: Distribution of Particles ***
-        // Here we decide which process will manage which particles.
-        // For simplicity, we assign a particle to the process responsible for the cell its (x,y) falls in.
-        // Build counts for each process.
-        int *send_counts = calloc(size, sizeof(int));
-        for (long long i = 0; i < n_part_total; i++) {
-            int x_cell = (int)(particles_arr[i].x * inv_cell_side);
-            int y_cell = (int)(particles_arr[i].y * inv_cell_side);
-            // Determine process that owns this row
-            int owner;
-            // Loop over processes to check which domain contains y_cell.
-            int start, end;
-            for (owner = 0; owner < size; owner++) {
-                get_local_domain(owner, size, ncside, &start, &end);
-                if (y_cell >= start && y_cell <= end) {
-                    send_counts[owner]++;
-                    break;
-                }
-            }
-        }
-        // Compute displacements.
-        int *displs = malloc(size * sizeof(int));
-        displs[0] = 0;
-        for (int i = 1; i < size; i++) {
-            displs[i] = displs[i - 1] + send_counts[i - 1];
-        }
-        // Allocate buffer for particles for each process.
-        particle_t *all_particles = malloc(n_part_total * sizeof(particle_t));
-        // Copy particles into the appropriate positions.
-        // We will use a temporary array to hold the counts for each process.
-        int *temp_counts = calloc(size, sizeof(int));
-        for (long long i = 0; i < n_part_total; i++) {
-            int x_cell = (int)(particles_arr[i].x * inv_cell_side);
-            int y_cell = (int)(particles_arr[i].y * inv_cell_side);
-            int owner;
-            int start, end;
-            for (owner = 0; owner < size; owner++) {
-                get_local_domain(owner, size, ncside, &start, &end);
-                if (y_cell >= start && y_cell <= end) {
-                    int pos = displs[owner] + temp_counts[owner];
-                    all_particles[pos] = particles_arr[i];
-                    temp_counts[owner]++;
-                    break;
-                }
-            }
-        }
-        // Now, send the counts to each process (including self).
-        // First, send local_n_part count to each process.
-        for (int i = 0; i < size; i++) {
-            if (i == 0) {
-                local_n_part = send_counts[0];
-                local_particles = malloc(local_n_part * sizeof(particle_t));
-                if (!local_particles) {
-                    fprintf(stderr, "Memory allocation failed for local_particles at process 0.\n");
-                    MPI_Abort(MPI_COMM_WORLD, 1);
-                }
-                memcpy(local_particles, all_particles, local_n_part * sizeof(particle_t));
-            } else {
-                MPI_Send(&send_counts[i], 1, MPI_INT, i, 0, MPI_COMM_WORLD);
-                MPI_Send(all_particles + displs[i], send_counts[i] * sizeof(particle_t), MPI_BYTE, i, 1, MPI_COMM_WORLD);
-            }
-        }
-        free(send_counts);
-        free(displs);
-        free(temp_counts);
-        free(all_particles);
-        free(particles_arr);
-    } else {
-        // Other processes receive the number of particles and their data.
-        MPI_Recv(&local_n_part, 1, MPI_LONG, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        local_particles = malloc(local_n_part * sizeof(particle_t));
-        if (!local_particles) {
-            fprintf(stderr, "Process %d: Memory allocation failed for local_particles.\n", rank);
-            MPI_Abort(MPI_COMM_WORLD, 1);
-        }
-        MPI_Recv(local_particles, local_n_part * sizeof(particle_t), MPI_BYTE, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    }
-
-    // Start simulation timer.
-    double local_start_time = MPI_Wtime();
-
-    // Simulation loop.
+    ////////////////////////////////////////////////////////////
+    /////////////////////Main Routine///////////////////////////
+    ////////////////////////////////////////////////////////////
     for (long long t = 0; t < time_steps; t++) {
         if(rank == 0) {
             printf("Time step %lld\n", t);
         }
+
         // --- 1. Build/Update Local Cells ---
         // Clear local cells and assign particles to the local cells (only for cells in rows [start_row, end_row]).
         for (long i = 0; i < local_total_cells; i++) {
@@ -346,7 +246,7 @@ int main(int argc, char *argv[])
         for (long long i = 0; i < local_n_part; i++) {
             int x_cell = (int)(local_particles[i].x * inv_cell_side);
             int y_cell = (int)(local_particles[i].y * inv_cell_side);
-            // Only assign particles that belong in this process’s rows.
+            // Only assign particles that belong in this process’s rows. <- Suppostamente ja verificamos isto mas bom failsafe
             if (y_cell >= start_row && y_cell <= end_row) {
                 // Map global cell (x_cell, y_cell) to local index:
                 int local_row = y_cell - start_row;
@@ -366,23 +266,21 @@ int main(int argc, char *argv[])
             }
         }
 
+        
         // --- 2. Exchange Ghost Cell Information ---
         // For forces calculation, each process needs information about the cells in the neighboring rows
         // that are managed by other processes. For example, process P (managing rows [start_row, end_row])
         // needs the row immediately above (from the process with rank P-1) and immediately below (from rank P+1).
         // Here you would pack the required cell center-of-mass (COM) and mass data and exchange with neighbors.
         // For brevity, we show a pseudocode outline:
-        /*
-            if (rank > 0) {
-                // Send first local row to rank-1 and receive ghost row from rank-1.
-            }
-            if (rank < size-1) {
-                // Send last local row to rank+1 and receive ghost row from rank+1.
-            }
-         
+        
+        
+        exchange_ghost_cells(local_cells, start_row, end_row, rank, size, MPI_COMM_WORLD);
+
         // You can use MPI_Sendrecv or nonblocking MPI_Isend/MPI_Irecv to exchange ghost row cell data.
         // After exchange, combine the ghost cell info with local cells when computing forces.
 
+        /*
         // --- 3. Calculate Forces ---
         // Call a modified version of calculate_forces that uses local_cells and local_particles.
         calculate_forces(local_particles, local_cells, &local_n_part, ncside, side, local_total_cells);
@@ -406,21 +304,9 @@ int main(int argc, char *argv[])
         
         // Synchronize at the end of the time step.
         MPI_Barrier(MPI_COMM_WORLD);
+        */
     }
 
-    double local_end_time = MPI_Wtime();
-    double local_exec_time = local_end_time - local_start_time;
-
-    // Optionally, gather collision counts or other statistics to process 0.
-    long long global_collision_count = 0;
-    MPI_Reduce(&local_collision_count, &global_collision_count, 1, MPI_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
-
-    if(rank == 0) {
-        printf("Global collisions: %lld\n", global_collision_count);
-        printf("Execution time: %f seconds\n", local_exec_time);
-    }
-
-    // Free local resources.
     for (long i = 0; i < local_total_cells; i++) {
         free(local_cells[i].indices);
     }
@@ -428,13 +314,92 @@ int main(int argc, char *argv[])
     free(local_particles);
 
     MPI_Finalize();
-    return 0;
 }
-*/
 
 ///////////////////////////////////////
 // MPI Helper Functions
 ///////////////////////////////////////
+
+void exchange_ghost_cells(cell_t *cells, int start_row, int end_row, int rank, int size, MPI_Comm comm) {
+    int num_cells_per_row = size; // Number of cells in a row
+    printf("Process %d: exchanging ghost cells from rows %d to %d\n", rank, start_row, end_row);
+    // Buffers for sending and receiving ghost rows
+    cell_t *send_upper = &cells[0];  // First row to be sent
+    cell_t *recv_upper = (cell_t*) malloc(num_cells_per_row * sizeof(cell_t)); // Ghost row above
+
+    cell_t *send_lower = &cells[(end_row - start_row) * size]; // Last row to be sent
+    cell_t *recv_lower = (cell_t*) malloc(num_cells_per_row * sizeof(cell_t)); // Ghost row below
+
+    MPI_Status status;
+
+    // Rank of neighboring processes in toroidal space
+    int rank_above = (rank - 1 + size) % size;  // Wrap around to last process if rank == 0
+    int rank_below = (rank + 1) % size;         // Wrap around to first process if rank == size-1
+
+    // Exchange ghost cells with top and bottom neighbors (toroidal)
+    MPI_Sendrecv(
+        send_upper, num_cells_per_row * sizeof(cell_t), MPI_BYTE, rank_above, 0,
+        recv_upper, num_cells_per_row * sizeof(cell_t), MPI_BYTE, rank_above, 0,
+        comm, &status
+    );
+
+    MPI_Sendrecv(
+        send_lower, num_cells_per_row * sizeof(cell_t), MPI_BYTE, rank_below, 1,
+        recv_lower, num_cells_per_row * sizeof(cell_t), MPI_BYTE, rank_below, 1,
+        comm, &status
+    );
+
+    // Store received ghost rows
+    memcpy(&cells[-size], recv_upper, num_cells_per_row * sizeof(cell_t)); // Ghost row before first row
+    memcpy(&cells[(end_row - start_row + 1) * size], recv_lower, num_cells_per_row * sizeof(cell_t)); // Ghost row after last row
+
+    // Free buffers
+    free(recv_upper);
+    free(recv_lower);
+}
+
+// New function: determine local domain bounds for a process.
+void get_local_domain(int rank, int size, int ncside, int *start_row, int *end_row) {
+    // Divide ncside rows as evenly as possible among all processes.
+    int rows_per_proc = ncside / size;
+    int extra = ncside % size;
+    *start_row = rank * rows_per_proc + (rank < extra ? rank : extra);
+    *end_row = *start_row + rows_per_proc - 1;
+    if (rank < extra) {
+        (*end_row)++;
+    }
+}
+
+void initialize_and_distribute_cells(int rank, int size, long ncside, cell_t *local_cells) {
+
+    int start_row, end_row;
+    get_local_domain(rank, size, ncside, &start_row, &end_row);
+    int local_rows = end_row - start_row + 1;
+    // Each process manages local_rows * ncside cells.
+    long local_total_cells = local_rows * ncside;
+
+    //print_process_cell_assignment(rank, size, ncside, side, start_row, end_row);
+
+    // Allocate local cells (only for the rows this process owns).
+    local_cells = malloc(local_total_cells * sizeof(cell_t));
+    if (!local_cells) {
+        fprintf(stderr, "Process %d: Memory allocation failed for local cells.\n", rank);
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+    // Initialize local cell arrays (similar to init_cells but only for local domain).
+    for (long i = 0; i < local_total_cells; i++) {
+        local_cells[i].capacity = 1000;
+        local_cells[i].count = 0;
+        local_cells[i].indices = malloc(local_cells[i].capacity * sizeof(int));
+        if (!local_cells[i].indices) {
+            fprintf(stderr, "Process %d: Memory allocation failed for cell indices.\n", rank);
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+        local_cells[i].x = 0;
+        local_cells[i].y = 0;
+        local_cells[i].m = 0;
+    }
+}
 
 
 ///////////////////////////////////////
