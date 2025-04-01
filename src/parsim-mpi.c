@@ -258,16 +258,10 @@ int main(int argc, char *argv[])
         }
 
         // --- 1. Build/Update Local Cells ---
-        // Clear local cells and assign particles to the local cells (only for cells in rows [start_row, end_row]).
         build_com(local_particles, local_n_part, ncside, cell_side, inv_cell_side, local_total_cells, local_cells);
 
         
         // --- 2. Exchange Ghost Cell Information ---
-        // For forces calculation, each process needs information about the cells in the neighboring rows
-        // that are managed by other processes. For example, process P (managing rows [start_row, end_row])
-        // needs the row immediately above (from the process with rank P-1) and immediately below (from rank P+1).
-        // Here you would pack the required cell center-of-mass (COM) and mass data and exchange with neighbors.
-        // For brevity, we show a pseudocode outline:
         MPI_Barrier(MPI_COMM_WORLD);
         printf("At timestep %lld, process %d has the following local cells:\n", t, rank);
         print_cells(local_cells, local_total_cells, rank);
@@ -276,7 +270,7 @@ int main(int argc, char *argv[])
         cell_t *ghost_lower = NULL;
         ghost_upper = (cell_t*)malloc(ncside * sizeof(cell_t));
         ghost_lower = (cell_t*)malloc(ncside * sizeof(cell_t));
-        exchange_ghost_cells(local_cells, start_row, end_row, rank, size, MPI_COMM_WORLD, ghost_upper, ghost_lower);
+        exchange_ghost_cells(local_cells, start_row, end_row, rank, size, MPI_COMM_WORLD, ghost_upper, ghost_lower, ncside);
         MPI_Barrier(MPI_COMM_WORLD);
         free(ghost_upper);
         free(ghost_lower);
@@ -357,10 +351,9 @@ void build_com(particle_t *par, long long n_part, long ncside, double cell_size,
 // MPI Helper Functions
 ///////////////////////////////////////
 
-void exchange_ghost_cells(cell_t *cells, int start_row, int end_row, int rank, int size, MPI_Comm comm, cell_t *ghost_upper, cell_t *ghost_lower) {
-    int num_cells_per_row = size;
+void exchange_ghost_cells(cell_t *cells, int start_row, int end_row, int rank, int size, MPI_Comm comm, cell_t *ghost_upper, cell_t *ghost_lower, int ncside) {
+    int num_cells_per_row = ncside;
     
-    //printf("GOT HERE\n");
     cell_t *send_upper = &cells[0];
     cell_t *send_lower = &cells[(end_row - start_row) * num_cells_per_row];
     cell_t *recv_upper = (cell_t*)malloc(num_cells_per_row * sizeof(cell_t));
@@ -369,16 +362,6 @@ void exchange_ghost_cells(cell_t *cells, int start_row, int end_row, int rank, i
     int rank_above = (rank - 1 + size) % size;
     int rank_below = (rank + 1) % size;
 
-    /*
-    MPI_Send(send_upper, num_cells_per_row * sizeof(cell_t), MPI_BYTE, rank_above, 0, MPI_COMM_WORLD);
-
-    MPI_Send(send_lower, num_cells_per_row * sizeof(cell_t), MPI_BYTE, rank_below, 1, MPI_COMM_WORLD);
-
-    MPI_Recv(recv_upper, num_cells_per_row * sizeof(cell_t), MPI_BYTE, rank_below, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-
-    MPI_Recv(recv_lower, num_cells_per_row * sizeof(cell_t), MPI_BYTE, rank_above, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    */ 
-    
     MPI_Sendrecv(send_upper, num_cells_per_row * sizeof(cell_t), MPI_BYTE, rank_below, 0,
                  recv_upper, num_cells_per_row * sizeof(cell_t), MPI_BYTE, rank_above, 0,
                  comm, MPI_STATUS_IGNORE);
@@ -387,7 +370,7 @@ void exchange_ghost_cells(cell_t *cells, int start_row, int end_row, int rank, i
                  recv_lower, num_cells_per_row * sizeof(cell_t), MPI_BYTE, rank_below, 1,
                  comm, MPI_STATUS_IGNORE);    
     
-                 /*
+    /*
     // Store ghost rows
     memcpy(ghost_upper, recv_upper, num_cells_per_row * sizeof(cell_t));
     memcpy(ghost_lower, recv_lower, num_cells_per_row * sizeof(cell_t));
