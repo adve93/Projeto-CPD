@@ -97,7 +97,6 @@ int main(int argc, char *argv[])
     const long total_cells = ncside * ncside;
 
     cell_t *local_cells = NULL;
-    //initialize_and_distribute_cells(rank, size, ncside, local_cells);
 
     ////////////////////////////////////////////////////////////
     ////////////Initialize And Distribute Cells/////////////////
@@ -224,6 +223,28 @@ int main(int argc, char *argv[])
         MPI_Recv(local_particles, local_n_part * sizeof(particle_t), MPI_BYTE, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     }
     
+    for (long long i = 0; i < local_n_part; i++) {
+        int x_cell = (int)(local_particles[i].x * inv_cell_side);
+        int y_cell = (int)(local_particles[i].y * inv_cell_side);
+        // Only assign particles that belong in this process’s rows. <- Suppostamente ja verificamos isto mas bom failsafe
+        if (y_cell >= start_row && y_cell <= end_row) {
+            // Map global cell (x_cell, y_cell) to local index:
+            int local_row = y_cell - start_row;
+            int local_cell_index = local_row * ncside + x_cell;
+            local_particles[i].x_cell = x_cell;
+            local_particles[i].y_cell = y_cell;
+            // Make sure there is capacity.
+            if (local_cells[local_cell_index].count == local_cells[local_cell_index].capacity) {
+                local_cells[local_cell_index].capacity *= 2;
+                local_cells[local_cell_index].indices = realloc(local_cells[local_cell_index].indices, local_cells[local_cell_index].capacity * sizeof(int));
+                if (!local_cells[local_cell_index].indices) {
+                    fprintf(stderr, "Process %d: Memory reallocation failed for cell indices.\n", rank);
+                    MPI_Abort(MPI_COMM_WORLD, 1);
+                }
+            }
+            local_cells[local_cell_index].indices[local_cells[local_cell_index].count++] = i;
+        }
+    }
     //print_local_particles(rank, size, local_particles, local_n_part, inv_cell_side);
 
 
@@ -231,40 +252,14 @@ int main(int argc, char *argv[])
     /////////////////////Main Routine///////////////////////////
     ////////////////////////////////////////////////////////////
     for (long long t = 0; t < time_steps; t++) {
+        MPI_Barrier(MPI_COMM_WORLD);
         if(rank == 0) {
             printf("Time step %lld\n", t);
         }
 
         // --- 1. Build/Update Local Cells ---
         // Clear local cells and assign particles to the local cells (only for cells in rows [start_row, end_row]).
-        for (long i = 0; i < local_total_cells; i++) {
-            local_cells[i].count = 0;
-            local_cells[i].x = 0;
-            local_cells[i].y = 0;
-            local_cells[i].m = 0;
-        }
-        for (long long i = 0; i < local_n_part; i++) {
-            int x_cell = (int)(local_particles[i].x * inv_cell_side);
-            int y_cell = (int)(local_particles[i].y * inv_cell_side);
-            // Only assign particles that belong in this process’s rows. <- Suppostamente ja verificamos isto mas bom failsafe
-            if (y_cell >= start_row && y_cell <= end_row) {
-                // Map global cell (x_cell, y_cell) to local index:
-                int local_row = y_cell - start_row;
-                int local_cell_index = local_row * ncside + x_cell;
-                local_particles[i].x_cell = x_cell;
-                local_particles[i].y_cell = y_cell;
-                // Make sure there is capacity.
-                if (local_cells[local_cell_index].count == local_cells[local_cell_index].capacity) {
-                    local_cells[local_cell_index].capacity *= 2;
-                    local_cells[local_cell_index].indices = realloc(local_cells[local_cell_index].indices, local_cells[local_cell_index].capacity * sizeof(int));
-                    if (!local_cells[local_cell_index].indices) {
-                        fprintf(stderr, "Process %d: Memory reallocation failed for cell indices.\n", rank);
-                        MPI_Abort(MPI_COMM_WORLD, 1);
-                    }
-                }
-                local_cells[local_cell_index].indices[local_cells[local_cell_index].count++] = i;
-            }
-        }
+        build_com(local_particles, local_n_part, ncside, cell_side, inv_cell_side, local_total_cells, local_cells);
 
         
         // --- 2. Exchange Ghost Cell Information ---
@@ -273,9 +268,19 @@ int main(int argc, char *argv[])
         // needs the row immediately above (from the process with rank P-1) and immediately below (from rank P+1).
         // Here you would pack the required cell center-of-mass (COM) and mass data and exchange with neighbors.
         // For brevity, we show a pseudocode outline:
+        MPI_Barrier(MPI_COMM_WORLD);
+        printf("At timestep %lld, process %d has the following local cells:\n", t, rank);
+        print_cells(local_cells, local_total_cells, rank);
+
+        cell_t *ghost_upper = NULL;
+        cell_t *ghost_lower = NULL;
+        ghost_upper = (cell_t*)malloc(ncside * sizeof(cell_t));
+        ghost_lower = (cell_t*)malloc(ncside * sizeof(cell_t));
+        exchange_ghost_cells(local_cells, start_row, end_row, rank, size, MPI_COMM_WORLD, ghost_upper, ghost_lower);
+        MPI_Barrier(MPI_COMM_WORLD);
+        free(ghost_upper);
+        free(ghost_lower);
         
-        
-        exchange_ghost_cells(local_cells, start_row, end_row, rank, size, MPI_COMM_WORLD);
 
         // You can use MPI_Sendrecv or nonblocking MPI_Isend/MPI_Irecv to exchange ghost row cell data.
         // After exchange, combine the ghost cell info with local cells when computing forces.
@@ -303,8 +308,9 @@ int main(int argc, char *argv[])
         // (For brevity, the detailed migration code is omitted here.)
         
         // Synchronize at the end of the time step.
-        MPI_Barrier(MPI_COMM_WORLD);
         */
+        MPI_Barrier(MPI_COMM_WORLD);
+        
     }
 
     for (long i = 0; i < local_total_cells; i++) {
@@ -317,45 +323,86 @@ int main(int argc, char *argv[])
 }
 
 ///////////////////////////////////////
+// Functions
+///////////////////////////////////////
+
+void build_com(particle_t *par, long long n_part, long ncside, double cell_size, double inv_cell_size, long total_cells, cell_t *cells)
+{
+
+    // Reset cell COMs and masses
+    for (long i = 0; i < total_cells; i++)
+    {
+        cells[i].x = 0;
+        cells[i].y = 0;
+        cells[i].m = 0;
+
+        for (long long j = 0; j < cells[i].count; j++)
+        {
+            int idx = cells[i].indices[j];
+            cells[i].x += par[idx].x * par[idx].m;
+            cells[i].y += par[idx].y * par[idx].m;
+            cells[i].m += par[idx].m;
+        }
+
+        if (cells[i].m > 0)
+        {
+            cells[i].x /= cells[i].m;
+            cells[i].y /= cells[i].m;
+        }
+    }
+}
+
+
+///////////////////////////////////////
 // MPI Helper Functions
 ///////////////////////////////////////
 
-void exchange_ghost_cells(cell_t *cells, int start_row, int end_row, int rank, int size, MPI_Comm comm) {
-    int num_cells_per_row = size; // Number of cells in a row
-    printf("Process %d: exchanging ghost cells from rows %d to %d\n", rank, start_row, end_row);
-    // Buffers for sending and receiving ghost rows
-    cell_t *send_upper = &cells[0];  // First row to be sent
-    cell_t *recv_upper = (cell_t*) malloc(num_cells_per_row * sizeof(cell_t)); // Ghost row above
+void exchange_ghost_cells(cell_t *cells, int start_row, int end_row, int rank, int size, MPI_Comm comm, cell_t *ghost_upper, cell_t *ghost_lower) {
+    int num_cells_per_row = size;
+    
+    //printf("GOT HERE\n");
+    cell_t *send_upper = &cells[0];
+    cell_t *send_lower = &cells[(end_row - start_row) * num_cells_per_row];
+    cell_t *recv_upper = (cell_t*)malloc(num_cells_per_row * sizeof(cell_t));
+    cell_t *recv_lower = (cell_t*)malloc(num_cells_per_row * sizeof(cell_t));
 
-    cell_t *send_lower = &cells[(end_row - start_row) * size]; // Last row to be sent
-    cell_t *recv_lower = (cell_t*) malloc(num_cells_per_row * sizeof(cell_t)); // Ghost row below
+    int rank_above = (rank - 1 + size) % size;
+    int rank_below = (rank + 1) % size;
 
-    MPI_Status status;
+    /*
+    MPI_Send(send_upper, num_cells_per_row * sizeof(cell_t), MPI_BYTE, rank_above, 0, MPI_COMM_WORLD);
 
-    // Rank of neighboring processes in toroidal space
-    int rank_above = (rank - 1 + size) % size;  // Wrap around to last process if rank == 0
-    int rank_below = (rank + 1) % size;         // Wrap around to first process if rank == size-1
+    MPI_Send(send_lower, num_cells_per_row * sizeof(cell_t), MPI_BYTE, rank_below, 1, MPI_COMM_WORLD);
 
-    // Exchange ghost cells with top and bottom neighbors (toroidal)
-    MPI_Sendrecv(
-        send_upper, num_cells_per_row * sizeof(cell_t), MPI_BYTE, rank_above, 0,
-        recv_upper, num_cells_per_row * sizeof(cell_t), MPI_BYTE, rank_above, 0,
-        comm, &status
-    );
+    MPI_Recv(recv_upper, num_cells_per_row * sizeof(cell_t), MPI_BYTE, rank_below, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
-    MPI_Sendrecv(
-        send_lower, num_cells_per_row * sizeof(cell_t), MPI_BYTE, rank_below, 1,
-        recv_lower, num_cells_per_row * sizeof(cell_t), MPI_BYTE, rank_below, 1,
-        comm, &status
-    );
+    MPI_Recv(recv_lower, num_cells_per_row * sizeof(cell_t), MPI_BYTE, rank_above, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    */ 
+    
+    MPI_Sendrecv(send_upper, num_cells_per_row * sizeof(cell_t), MPI_BYTE, rank_below, 0,
+                 recv_upper, num_cells_per_row * sizeof(cell_t), MPI_BYTE, rank_above, 0,
+                 comm, MPI_STATUS_IGNORE);
 
-    // Store received ghost rows
-    memcpy(&cells[-size], recv_upper, num_cells_per_row * sizeof(cell_t)); // Ghost row before first row
-    memcpy(&cells[(end_row - start_row + 1) * size], recv_lower, num_cells_per_row * sizeof(cell_t)); // Ghost row after last row
+    MPI_Sendrecv(send_lower, num_cells_per_row * sizeof(cell_t), MPI_BYTE, rank_above, 1,
+                 recv_lower, num_cells_per_row * sizeof(cell_t), MPI_BYTE, rank_below, 1,
+                 comm, MPI_STATUS_IGNORE);    
+    
+                 /*
+    // Store ghost rows
+    memcpy(ghost_upper, recv_upper, num_cells_per_row * sizeof(cell_t));
+    memcpy(ghost_lower, recv_lower, num_cells_per_row * sizeof(cell_t));
+    */
+    printf("Process %d has the following ghost cells:\n", rank);
+    printf("Ghost Upper Cells:\n");
+    print_cells(recv_upper, num_cells_per_row, rank);
+    printf("Ghost Lower Cells:\n");
+    print_cells(recv_lower, num_cells_per_row, rank);
 
-    // Free buffers
     free(recv_upper);
     free(recv_lower);
+
+    
+
 }
 
 // New function: determine local domain bounds for a process.
@@ -442,5 +489,15 @@ void print_local_particles(int rank, int size, particle_t *par, long long n_part
     MPI_Barrier(MPI_COMM_WORLD);
     if (rank == size-1) {
         printf("\n=== End of Distribution Report ===\n\n");
+    }
+}
+
+void print_cells(cell_t *cells, long ncside, int rank) {
+    printf("Process %d Cell Data:\n", rank);
+    printf("Cell Index | x | y | m\n");
+    printf("-------------------------\n");
+    for (int i = 0; i < ncside; i++)
+    {
+        printf("Cell %d x: %.6f y: %.6f m: %.6f\n", i, cells[i].x, cells[i].y, cells[i].m);
     }
 }
