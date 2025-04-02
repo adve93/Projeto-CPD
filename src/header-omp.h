@@ -11,6 +11,8 @@ typedef struct  {
     double ax, ay; //Acceleration
     double m; //Mass
     int x_cell, y_cell;
+    int new_x_cell, new_y_cell; // New cell indices
+    int cell_pos;
     int removed;
 } particle_t;
 
