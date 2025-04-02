@@ -315,6 +315,7 @@ void run_time_steps(particle_t *par, cell_t *cells, long long *n_part, long ncsi
 
             #pragma omp single
             for (long long i = 0; i < *n_part; i++) {
+                if (par[i].m == 0) continue; // Skip zero-mass particles
                 int old_cell_index = par[i].y_cell * ncside + par[i].x_cell;
                 int new_cell_index = par[i].new_y_cell * ncside + par[i].new_x_cell;
 

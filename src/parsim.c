@@ -288,34 +288,34 @@ void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long nc
         if (par[i].m == 0) continue; // Skip zero-mass particles
         int x_cell = par[i].x_cell;
         int y_cell = par[i].y_cell;
-        int offsets[8][2] = {{-1, -1}, {-1, 0}, {-1, 1}, {0, -1}, {0, 1}, {1, -1}, {1, 0}, {1, 1}};
-        for (int k = 0; k < 8; k++)
-        {
-            int dxc = offsets[k][0];
-            int dyc = offsets[k][1];
-            int nx = (x_cell + dxc + ncside) % ncside;
-            int ny = (y_cell + dyc + ncside) % ncside;
-            int neighbor_index = ny * ncside + nx;
-            if (cells[neighbor_index].m == 0) continue;
-            double dx_cm = cells[neighbor_index].x - par[i].x;
-            double dy_cm = cells[neighbor_index].y - par[i].y;
-            int diff_x = nx - x_cell;
-            if (diff_x > ncside / 2) diff_x -= ncside;
-            if (diff_x < -ncside / 2) diff_x += ncside;
-            if (diff_x > 0 && dx_cm < 0) dx_cm += side;
-            else if (diff_x < 0 && dx_cm > 0) dx_cm -= side;
-            int diff_y = ny - y_cell;
-            if (diff_y > ncside / 2) diff_y -= ncside;
-            if (diff_y < -ncside / 2) diff_y += ncside;
-            if (diff_y > 0 && dy_cm < 0) dy_cm += side;
-            else if (diff_y < 0 && dy_cm > 0) dy_cm -= side;
-            double dist2_cm = dx_cm * dx_cm + dy_cm * dy_cm;
-            double inv_r_cm = 1.0 / sqrt(dist2_cm);
-            double force_cm = G * (par[i].m * cells[neighbor_index].m) / dist2_cm;
-            double fx_cm = force_cm * dx_cm * inv_r_cm;
-            double fy_cm = force_cm * dy_cm * inv_r_cm;
-            par[i].ax += fx_cm / par[i].m;
-            par[i].ay += fy_cm / par[i].m;
+        for (int dxc = -1; dxc <= 1; dxc++) {
+            for (int dyc = -1; dyc <= 1; dyc++) {
+                if (dxc == 0 && dyc == 0) continue;
+                int nx = (x_cell + dxc + ncside) % ncside;
+                int ny = (y_cell + dyc + ncside) % ncside;
+                int neighbor_index = ny * ncside + nx;
+                if (cells[neighbor_index].m == 0) continue;
+                double dx_cm = cells[neighbor_index].x - par[i].x;
+                double dy_cm = cells[neighbor_index].y - par[i].y;
+                // Adjust for periodic boundaries
+                int diff_x = nx - x_cell;
+                if (diff_x > ncside/2) diff_x -= ncside;
+                if (diff_x < -ncside/2) diff_x += ncside;
+                if (diff_x > 0 && dx_cm < 0) dx_cm += side;
+                else if (diff_x < 0 && dx_cm > 0) dx_cm -= side;
+                int diff_y = ny - y_cell;
+                if (diff_y > ncside/2) diff_y -= ncside;
+                if (diff_y < -ncside/2) diff_y += ncside;
+                if (diff_y > 0 && dy_cm < 0) dy_cm += side;
+                else if (diff_y < 0 && dy_cm > 0) dy_cm -= side;
+                double dist2_cm = dx_cm * dx_cm + dy_cm * dy_cm;
+                double inv_r_cm = 1.0 / sqrt(dist2_cm);
+                double force_cm = G * (par[i].m * cells[neighbor_index].m) / dist2_cm;
+                double fx_cm = force_cm * dx_cm * inv_r_cm;
+                double fy_cm = force_cm * dy_cm * inv_r_cm;
+                par[i].ax += fx_cm / par[i].m;
+                par[i].ay += fy_cm / par[i].m;
+            }
         }
     }
 }
