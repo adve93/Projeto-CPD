@@ -369,7 +369,6 @@ void exchange_ghost_cells(int start_row, int end_row, int rank, int size, int lo
     cell_t *recv_upper = malloc(ncside * sizeof(cell_t));
     cell_t *recv_lower = malloc(ncside * sizeof(cell_t));
 
-    //print_cells(send_lower, ncside, rank);
     int rank_above = (rank - 1 + truesize) % truesize;
     int rank_below = (rank + 1) % truesize; 
     
@@ -381,20 +380,9 @@ void exchange_ghost_cells(int start_row, int end_row, int rank, int size, int lo
                  recv_upper, ncside * sizeof(cell_t), MPI_BYTE, rank_above, 1,
                  comm, MPI_STATUS_IGNORE);    
     
-    
     // Store ghost rows
     memcpy(ghost_upper, recv_upper, ncside * sizeof(cell_t));
     memcpy(ghost_lower, recv_lower, ncside * sizeof(cell_t));
-    //print_cells(ghost_lower, ncside, rank);
-    
-    if(rank == 0) {
-        printf("Process %d has the following ghost cells:\n", rank);
-        printf("Ghost Upper Cells:\n");
-        print_cells(ghost_upper, ncside, rank);
-        printf("Ghost Lower Cells:\n");
-        print_cells(ghost_lower, ncside, rank);
-    }
-    
 
     free(recv_upper);
     free(recv_lower);
