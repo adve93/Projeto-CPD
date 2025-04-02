@@ -30,7 +30,7 @@ void print_local_particles(int rank, int size, particle_t *par, long long n_part
 void get_local_domain(int rank, int size, int ncside, int *start_row, int *end_row);
 void initialize_and_distribute_cells(int rank, int size, long ncside, cell_t *local_cells);
 void initialize_and_distribute_particles(int rank, int size, long ncside, double side, long long n_part_total, particle_t *local_particles, int inv_cell_side, long long local_n_part);
-void exchange_ghost_cells(cell_t *cells, int start_row, int end_row, int rank, int size, MPI_Comm comm, cell_t *ghost_upper, cell_t *ghost_lower, int ncside);
+void exchange_ghost_cells(int start_row, int end_row, int rank, int size,  int total_local_cells, int ncside, int truesize, MPI_Comm comm, cell_t *local_cells, cell_t *ghost_upper, cell_t *ghost_lower);
 void build_com(particle_t *par, long long n_part, long ncside, double cell_size, double inv_cell_size, long total_cells, cell_t *cells);
 void print_cells(cell_t *cells, long ncside, int rank);
 

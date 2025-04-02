@@ -106,6 +106,7 @@ int main(int argc, char *argv[])
     int local_rows = end_row - start_row + 1;
     // Each process manages local_rows * ncside cells.
     long local_total_cells = local_rows * ncside;
+   
 
     //print_process_cell_assignment(rank, size, ncside, side, start_row, end_row);
 
@@ -136,9 +137,10 @@ int main(int argc, char *argv[])
 
     particle_t *local_particles = NULL;
     long long local_n_part = 0;
+    int truesize = 0;
 
     if(rank == 0) {
-
+        truesize = size;
         // Process 0 initializes the full particle array.
         particle_t *particles_arr = malloc(n_part_total * sizeof(particle_t));
         if (!particles_arr) {
@@ -203,9 +205,15 @@ int main(int argc, char *argv[])
                 }
                 memcpy(local_particles, all_particles, local_n_part * sizeof(particle_t));
             } else {
+                if(send_counts[i] == 0) {
+                    truesize--;
+                }
                 MPI_Send(&send_counts[i], 1, MPI_INT, i, 0, MPI_COMM_WORLD);
                 MPI_Send(all_particles + displs[i], send_counts[i] * sizeof(particle_t), MPI_BYTE, i, 1, MPI_COMM_WORLD);
             }
+        }
+        for(int i =1; i < size; i++) {
+            MPI_Send(&truesize, 1, MPI_INT, i, 2, MPI_COMM_WORLD);
         }
         free(send_counts);
         free(displs);
@@ -221,6 +229,7 @@ int main(int argc, char *argv[])
             MPI_Abort(MPI_COMM_WORLD, 1);
         }
         MPI_Recv(local_particles, local_n_part * sizeof(particle_t), MPI_BYTE, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv(&truesize, 1, MPI_INT, 0, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     }
     
     for (long long i = 0; i < local_n_part; i++) {
@@ -247,11 +256,11 @@ int main(int argc, char *argv[])
     }
     //print_local_particles(rank, size, local_particles, local_n_part, inv_cell_side);
 
-
     ////////////////////////////////////////////////////////////
     /////////////////////Main Routine///////////////////////////
     ////////////////////////////////////////////////////////////
     for (long long t = 0; t < time_steps; t++) {
+
         MPI_Barrier(MPI_COMM_WORLD);
         if(rank == 0) {
             printf("Time step %lld\n", t);
@@ -260,20 +269,22 @@ int main(int argc, char *argv[])
         // --- 1. Build/Update Local Cells ---
         build_com(local_particles, local_n_part, ncside, cell_side, inv_cell_side, local_total_cells, local_cells);
 
-        
         // --- 2. Exchange Ghost Cell Information ---
         MPI_Barrier(MPI_COMM_WORLD);
-        printf("At timestep %lld, process %d has the following local cells:\n", t, rank);
-        print_cells(local_cells, local_total_cells, rank);
 
-        cell_t *ghost_upper = NULL;
-        cell_t *ghost_lower = NULL;
-        ghost_upper = (cell_t*)malloc(ncside * sizeof(cell_t));
-        ghost_lower = (cell_t*)malloc(ncside * sizeof(cell_t));
-        exchange_ghost_cells(local_cells, start_row, end_row, rank, size, MPI_COMM_WORLD, ghost_upper, ghost_lower, ncside);
+        
+        if(local_total_cells > 0) {
+            
+            cell_t *ghost_upper = NULL;
+            cell_t *ghost_lower = NULL;
+            ghost_upper = malloc(ncside * sizeof(cell_t));
+            ghost_lower = malloc(ncside * sizeof(cell_t));
+            exchange_ghost_cells(start_row, end_row, rank, size, local_rows, ncside, truesize, MPI_COMM_WORLD, local_cells, ghost_upper, ghost_lower);
+            free(ghost_upper);
+            free(ghost_lower);
+            
+        }
         MPI_Barrier(MPI_COMM_WORLD);
-        free(ghost_upper);
-        free(ghost_lower);
         
 
         // You can use MPI_Sendrecv or nonblocking MPI_Isend/MPI_Irecv to exchange ghost row cell data.
@@ -351,40 +362,40 @@ void build_com(particle_t *par, long long n_part, long ncside, double cell_size,
 // MPI Helper Functions
 ///////////////////////////////////////
 
-void exchange_ghost_cells(cell_t *cells, int start_row, int end_row, int rank, int size, MPI_Comm comm, cell_t *ghost_upper, cell_t *ghost_lower, int ncside) {
-    int num_cells_per_row = ncside;
+void exchange_ghost_cells(int start_row, int end_row, int rank, int size, int local_rows, int ncside, int truesize, MPI_Comm comm, cell_t *local_cells, cell_t *ghost_upper, cell_t *ghost_lower) {
+
+    cell_t *send_upper = &local_cells[0];
+    cell_t *send_lower = &local_cells[local_rows * ncside];
+    cell_t *recv_upper = malloc(ncside * sizeof(cell_t));
+    cell_t *recv_lower = malloc(ncside * sizeof(cell_t));
+
+    int rank_above = (rank - 1 + truesize) % truesize;
+    int rank_below = (rank + 1) % truesize; 
     
-    cell_t *send_upper = &cells[0];
-    cell_t *send_lower = &cells[(end_row - start_row) * num_cells_per_row];
-    cell_t *recv_upper = (cell_t*)malloc(num_cells_per_row * sizeof(cell_t));
-    cell_t *recv_lower = (cell_t*)malloc(num_cells_per_row * sizeof(cell_t));
-
-    int rank_above = (rank - 1 + size) % size;
-    int rank_below = (rank + 1) % size;
-
-    MPI_Sendrecv(send_upper, num_cells_per_row * sizeof(cell_t), MPI_BYTE, rank_below, 0,
-                 recv_upper, num_cells_per_row * sizeof(cell_t), MPI_BYTE, rank_above, 0,
+    MPI_Sendrecv(send_upper, ncside * sizeof(cell_t), MPI_BYTE, rank_above, 0,
+                recv_lower, ncside * sizeof(cell_t), MPI_BYTE, rank_below, 0,
                  comm, MPI_STATUS_IGNORE);
 
-    MPI_Sendrecv(send_lower, num_cells_per_row * sizeof(cell_t), MPI_BYTE, rank_above, 1,
-                 recv_lower, num_cells_per_row * sizeof(cell_t), MPI_BYTE, rank_below, 1,
+    MPI_Sendrecv(send_lower, ncside * sizeof(cell_t), MPI_BYTE, rank_below, 1,
+                 recv_upper, ncside * sizeof(cell_t), MPI_BYTE, rank_above, 1,
                  comm, MPI_STATUS_IGNORE);    
     
-    /*
+    
     // Store ghost rows
-    memcpy(ghost_upper, recv_upper, num_cells_per_row * sizeof(cell_t));
-    memcpy(ghost_lower, recv_lower, num_cells_per_row * sizeof(cell_t));
-    */
-    printf("Process %d has the following ghost cells:\n", rank);
-    printf("Ghost Upper Cells:\n");
-    print_cells(recv_upper, num_cells_per_row, rank);
-    printf("Ghost Lower Cells:\n");
-    print_cells(recv_lower, num_cells_per_row, rank);
+    memcpy(ghost_upper, recv_upper, ncside * sizeof(cell_t));
+    memcpy(ghost_lower, recv_lower, ncside * sizeof(cell_t));
+    
+    
+    if(rank == 0) {
+        printf("Process %d has the following ghost cells:\n", rank);
+        printf("Ghost Upper Cells:\n");
+        print_cells(ghost_upper, ncside, rank);
+        printf("Ghost Lower Cells:\n");
+        print_cells(ghost_lower, ncside, rank);
+    }
 
     free(recv_upper);
     free(recv_lower);
-
-    
 
 }
 
@@ -397,37 +408,6 @@ void get_local_domain(int rank, int size, int ncside, int *start_row, int *end_r
     *end_row = *start_row + rows_per_proc - 1;
     if (rank < extra) {
         (*end_row)++;
-    }
-}
-
-void initialize_and_distribute_cells(int rank, int size, long ncside, cell_t *local_cells) {
-
-    int start_row, end_row;
-    get_local_domain(rank, size, ncside, &start_row, &end_row);
-    int local_rows = end_row - start_row + 1;
-    // Each process manages local_rows * ncside cells.
-    long local_total_cells = local_rows * ncside;
-
-    //print_process_cell_assignment(rank, size, ncside, side, start_row, end_row);
-
-    // Allocate local cells (only for the rows this process owns).
-    local_cells = malloc(local_total_cells * sizeof(cell_t));
-    if (!local_cells) {
-        fprintf(stderr, "Process %d: Memory allocation failed for local cells.\n", rank);
-        MPI_Abort(MPI_COMM_WORLD, 1);
-    }
-    // Initialize local cell arrays (similar to init_cells but only for local domain).
-    for (long i = 0; i < local_total_cells; i++) {
-        local_cells[i].capacity = 1000;
-        local_cells[i].count = 0;
-        local_cells[i].indices = malloc(local_cells[i].capacity * sizeof(int));
-        if (!local_cells[i].indices) {
-            fprintf(stderr, "Process %d: Memory allocation failed for cell indices.\n", rank);
-            MPI_Abort(MPI_COMM_WORLD, 1);
-        }
-        local_cells[i].x = 0;
-        local_cells[i].y = 0;
-        local_cells[i].m = 0;
     }
 }
 
