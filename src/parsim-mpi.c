@@ -365,7 +365,7 @@ void build_com(particle_t *par, long long n_part, long ncside, double cell_size,
 void exchange_ghost_cells(int start_row, int end_row, int rank, int size, int local_rows, int ncside, int truesize, MPI_Comm comm, cell_t *local_cells, cell_t *ghost_upper, cell_t *ghost_lower) {
 
     cell_t *send_upper = &local_cells[0];
-    cell_t *send_lower = &local_cells[local_rows * ncside];
+    cell_t *send_lower = &local_cells[(local_rows -1) * ncside];
     cell_t *recv_upper = malloc(ncside * sizeof(cell_t));
     cell_t *recv_lower = malloc(ncside * sizeof(cell_t));
 
@@ -385,8 +385,8 @@ void exchange_ghost_cells(int start_row, int end_row, int rank, int size, int lo
     // Store ghost rows
     memcpy(ghost_upper, recv_upper, ncside * sizeof(cell_t));
     memcpy(ghost_lower, recv_lower, ncside * sizeof(cell_t));
-    print_cells(ghost_lower, ncside, rank);
-    /*
+    //print_cells(ghost_lower, ncside, rank);
+    
     if(rank == 0) {
         printf("Process %d has the following ghost cells:\n", rank);
         printf("Ghost Upper Cells:\n");
@@ -394,7 +394,7 @@ void exchange_ghost_cells(int start_row, int end_row, int rank, int size, int lo
         printf("Ghost Lower Cells:\n");
         print_cells(ghost_lower, ncside, rank);
     }
-    */
+    
 
     free(recv_upper);
     free(recv_lower);
