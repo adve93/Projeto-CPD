@@ -83,7 +83,7 @@ int main(int argc, char *argv[]) {
 
     // Set max threads once
     max_threads = omp_get_max_threads();
-    omp_set_num_threads(1);
+    omp_set_num_threads(max_threads);
     
     // Allocate memory for particles and cells
     particle_t *particles_arr = malloc(n_part * sizeof(particle_t));
@@ -181,6 +181,7 @@ cell_t *init_cells(particle_t *par, long total_cells, long long n_part, long ncs
         y_cell = (y_cell + ncside) % ncside;
         int cell_index = y_cell * ncside + x_cell;
         // Assign particle index to the cell's indices array
+        par[i].cell_pos = cells[cell_index].count; // Set cell_pos
         cells[cell_index].indices[cells[cell_index].count] = i;
         cells[cell_index].count++;  // Increment the count
     }
@@ -195,13 +196,6 @@ cell_t *init_cells(particle_t *par, long total_cells, long long n_part, long ncs
 ///////////////////////////////////////
 
 void run_time_steps(particle_t *par, cell_t *cells, long long *n_part, long ncside, double side, double cell_side, long long *collision_count, long total_cells, long long time_steps) {
-
-    // Allocate marked_for_removal with initial size (won't need resizing since *n_part only decreases)
-    int *marked_for_removal = calloc(*n_part, sizeof(int));
-    if (!marked_for_removal) {
-        fprintf(stderr, "Memory allocation failed.\n");
-        exit(1);
-    }
 
     // Parallel region for all time steps
     #pragma omp parallel
@@ -254,6 +248,7 @@ void run_time_steps(particle_t *par, cell_t *cells, long long *n_part, long ncsi
             // Compute forces between particles and adjacent cells' COM
             #pragma omp for
             for (long long i = 0; i < *n_part; i++) {
+                if (par[i].m == 0) continue; // Skip zero-mass particles
                 int x_cell = par[i].x_cell;
                 int y_cell = par[i].y_cell;
                 for (int dxc = -1; dxc <= 1; dxc++) {
@@ -290,62 +285,58 @@ void run_time_steps(particle_t *par, cell_t *cells, long long *n_part, long ncsi
             // Update positions and velocities
             #pragma omp for
             for (long long i = 0; i < *n_part; i++) {
-
-                // Store previous cell index
-                int prev_x_cell = par[i].x_cell;
-                int prev_y_cell = par[i].y_cell;
-                int prev_cell_index = prev_y_cell * ncside + prev_x_cell;
-                
+                if (par[i].m == 0) continue; // Skip zero-mass particles
+                // Update position using velocity and acceleration
                 par[i].x += par[i].vx * DELTAT + 0.5 * par[i].ax * DELTAT * DELTAT;
                 par[i].y += par[i].vy * DELTAT + 0.5 * par[i].ay * DELTAT * DELTAT;
-                
+
+                // Apply periodic boundary conditions
                 par[i].x = fmod(par[i].x, side);
                 if (par[i].x < 0) par[i].x += side;
                 par[i].y = fmod(par[i].y, side);
                 if (par[i].y < 0) par[i].y += side;
 
-                // Compute new cell index
+                // Compute new cell indices based on updated position
                 int new_x_cell = (int)(par[i].x / cell_side);
                 int new_y_cell = (int)(par[i].y / cell_side);
                 if (new_x_cell >= ncside) new_x_cell = ncside - 1;
                 if (new_y_cell >= ncside) new_y_cell = ncside - 1;
-                int new_cell_index = new_y_cell * ncside + new_x_cell;
 
-                // Check if the particle has moved to a different cell
-                if (new_cell_index != prev_cell_index) {
-                    #pragma omp critical
-                    {
-                        // Remove from old cell
-                        for (int j = 0; j < cells[prev_cell_index].count; j++) {
-                            if (cells[prev_cell_index].indices[j] == i) {
-                                cells[prev_cell_index].indices[j] = cells[prev_cell_index].indices[cells[prev_cell_index].count - 1];
-                                cells[prev_cell_index].count--;
-                                break;
-                            }
-                        }
-                    }
+                // Store new cell indices in the particle struct
+                par[i].new_x_cell = new_x_cell;
+                par[i].new_y_cell = new_y_cell;
 
-                    // Update particle's cell index
-                    par[i].x_cell = new_x_cell;
-                    par[i].y_cell = new_y_cell;
-
-                    #pragma omp critical
-                    {
-                        cells[new_cell_index].indices[cells[new_cell_index].count++] = i;
-                    }
-                }
-                
-                // Update velocities
+                // Update velocity and reset acceleration
                 par[i].vx += par[i].ax * DELTAT;
                 par[i].vy += par[i].ay * DELTAT;
-                // Reset acceleration for the next time step
                 par[i].ax = 0;
                 par[i].ay = 0;
             }
 
-            #pragma omp for
+            #pragma omp single
             for (long long i = 0; i < *n_part; i++) {
-                marked_for_removal[i] = 0;
+                if (par[i].m == 0) continue; // Skip zero-mass particles
+                int old_cell_index = par[i].y_cell * ncside + par[i].x_cell;
+                int new_cell_index = par[i].new_y_cell * ncside + par[i].new_x_cell;
+
+                // If the particle’s cell has changed, update the cells array
+                if (new_cell_index != old_cell_index) {
+                    // Remove from old cell
+                    for (int j = 0; j < cells[old_cell_index].count; j++) {
+                        if (cells[old_cell_index].indices[j] == i) {
+                            // Replace with the last index and decrement count
+                            cells[old_cell_index].indices[j] = cells[old_cell_index].indices[cells[old_cell_index].count - 1];
+                            cells[old_cell_index].count--;
+                            break;
+                        }
+                    }
+
+                    cells[new_cell_index].indices[cells[new_cell_index].count++] = i;
+
+                    // Update particle’s current cell indices
+                    par[i].x_cell = par[i].new_x_cell;
+                    par[i].y_cell = par[i].new_y_cell;
+                }
             }
 
             // Step 1 & 2: Detect collisions and compact cell index lists
@@ -354,17 +345,17 @@ void run_time_steps(particle_t *par, cell_t *cells, long long *n_part, long ncsi
                 if (cells[cell].count < 2) continue;
                 for (int i = 0; i < cells[cell].count; i++) {
                     int idx_i = cells[cell].indices[i];
-                    if (marked_for_removal[idx_i]) continue;
+                    if (par[idx_i].m == 0) continue; // Skip already zero-mass particles
                     int collision_detected = 0;
                     for (int j = i + 1; j < cells[cell].count; j++) {
                         int idx_j = cells[cell].indices[j];
-                        if (marked_for_removal[idx_j]) continue;
+                        if (par[idx_j].m == 0) continue; // Skip already zero-mass particles
                         double dx = par[idx_j].x - par[idx_i].x;
                         double dy = par[idx_j].y - par[idx_i].y;
                         double dist2 = dx * dx + dy * dy;
                         if (dist2 < EPSILON2) {
-                            marked_for_removal[idx_i] = 1;
-                            marked_for_removal[idx_j] = 1;
+                            par[idx_i].m = 0;  // Set mass to zero instead of marking
+                            par[idx_j].m = 0;
                             if (!collision_detected) {
                                 #pragma omp atomic
                                 (*collision_count)++;
@@ -374,44 +365,18 @@ void run_time_steps(particle_t *par, cell_t *cells, long long *n_part, long ncsi
                     }
                 }
 
+                // Compact the cell's indices array to exclude zero-mass particles
                 int new_count = 0;
                 for (int i = 0; i < cells[cell].count; i++) {
                     int idx = cells[cell].indices[i];
-                    if (!marked_for_removal[idx]) {
+                    if (par[idx].m != 0) {
                         cells[cell].indices[new_count++] = idx;
                     }
                 }
                 cells[cell].count = new_count;
             }
-
-            // Compact particle array
-            #pragma omp single
-            {
-                long long original_n = *n_part;
-                long long new_n_part = 0;
-                for (long long i = 0; i < original_n; i++) {
-                    if (!marked_for_removal[i]) {
-                        par[new_n_part] = par[i];
-                        marked_for_removal[i] = new_n_part;
-                        new_n_part++;
-                    } else {
-                        marked_for_removal[i] = -1;
-                    }
-                }
-                *n_part = new_n_part;
-            }
-
-            // Update cell index lists
-            #pragma omp for
-            for (long cell = 0; cell < total_cells; cell++) {
-                for (int i = 0; i < cells[cell].count; i++) {
-                    int old_idx = cells[cell].indices[i];
-                    cells[cell].indices[i] = marked_for_removal[old_idx];
-                }
-            }
         }
     }
-    free(marked_for_removal);
 }
 
 // Free memory allocated for particles and cells
