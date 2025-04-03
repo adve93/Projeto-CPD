@@ -291,26 +291,17 @@ int main(int argc, char *argv[])
         particle_t *ghost_par = malloc(local_n_part * sizeof(particle_t));
         long ghost_par_count = 0;
         update_positions_and_velocities(local_particles, ghost_par, local_cells, start_row, end_row, ghost_par_count, local_n_part, ncside, side, inv_cell_side, local_total_cells, rank);
+        
         free(ghost_par);
-        //print_local_particles(rank, size, local_particles, local_n_part, inv_cell_side);
 
         // --- 5. Exchange Particles ---
-        exchange_particles(rank, size, local_rows, ncside, truesize, MPI_COMM_WORLD, local_particles, ghost_par, ghost_par_count);
+        //exchange_particles(rank, size, local_rows, ncside, truesize, MPI_COMM_WORLD, local_particles, ghost_par, ghost_par_count);
         /*
-        // --- 5. Detect Collisions ---
+        // --- 6. Detect Collisions ---
         // Detect collisions locally (only within cells that the process owns).
         static long long local_collision_count = 0;
         detect_collisions(local_cells, local_particles, ncside, &local_n_part, &local_collision_count, local_total_cells, t);
 
-        // --- 6. Migrate Particles Across Process Boundaries ---
-        // After updating positions, some particles might have moved out of the local domain.
-        // Pack such particles and send them to the appropriate process.
-        // For instance, a particle with y_cell < start_row should be sent to process rank-1,
-        // and one with y_cell > end_row should be sent to process rank+1.
-        // You can use MPI_Sendrecv or MPI_Isend/MPI_Irecv to exchange these particles.
-        // After migration, update local_particles and local_n_part accordingly.
-        // (For brevity, the detailed migration code is omitted here.)
-        
         // Synchronize at the end of the time step.
         */
         MPI_Barrier(MPI_COMM_WORLD);
@@ -601,14 +592,31 @@ void exchange_ghost_cells(int start_row, int end_row, int rank, int size, int lo
 }
 
 void exchange_particles(int rank, int size, int local_rows, int ncside, int truesize, MPI_Comm comm, particle_t *local_particles, particle_t *ghost_particles, long ghost_par_count) {
-    // Send and receive particles that have moved out of the local domain.
-    // This is a simplified version; you may need to adjust it based on your specific requirements.
+    
+    long *recv_counts = NULL;
+    long *displs = NULL;
+    particle_t *all_particles = NULL;
+    long total_particles = 0;
+    int *send_counts = NULL;
+    //int *recv_counts = NULL;
 
-    // Send particles to the next process (rank + 1)
-    MPI_Send(local_particles, local_rows * ncside * sizeof(particle_t), MPI_BYTE, (rank + 1) % size, 0, comm);
+    if (rank == 0) {
+        recv_counts = malloc(size * sizeof(long));
+        recv_counts[0] = ghost_par_count;
+    }
 
-    // Receive particles from the previous process (rank - 1)
-    MPI_Recv(ghost_particles, local_rows * ncside * sizeof(particle_t), MPI_BYTE, (rank - 1 + size) % size, 0, comm, MPI_STATUS_IGNORE);
+ 
+  
+    // Free rank 0's buffers
+    if (rank == 0) {
+        free(recv_counts);
+        free(displs);
+        free(all_particles);
+    }
+
+    // Update local_particles array
+    free(local_particles); // Free the old particle array
+
 }
 
 // New function: determine local domain bounds for a process.
