@@ -106,7 +106,6 @@ int main(int argc, char *argv[])
     int local_rows = end_row - start_row + 1;
     // Each process manages local_rows * ncside cells.
     long local_total_cells = local_rows * ncside;
-   
 
     //print_process_cell_assignment(rank, size, ncside, side, start_row, end_row);
 
@@ -167,6 +166,7 @@ int main(int argc, char *argv[])
                 }
             }
         }
+
         // Compute displacements.
         int *displs = malloc(size * sizeof(int));
         displs[0] = 0;
@@ -270,34 +270,33 @@ int main(int argc, char *argv[])
         build_com(local_particles, local_n_part, ncside, cell_side, inv_cell_side, local_total_cells, local_cells);
 
         // --- 2. Exchange Ghost Cell Information ---
-        MPI_Barrier(MPI_COMM_WORLD);
-
-        
+        MPI_Barrier(MPI_COMM_WORLD);  
+        cell_t *ghost_upper = NULL;
+        cell_t *ghost_lower = NULL;
         if(local_total_cells > 0) {
-            
-            cell_t *ghost_upper = NULL;
-            cell_t *ghost_lower = NULL;
             ghost_upper = malloc(ncside * sizeof(cell_t));
             ghost_lower = malloc(ncside * sizeof(cell_t));
             exchange_ghost_cells(start_row, end_row, rank, size, local_rows, ncside, truesize, MPI_COMM_WORLD, local_cells, ghost_upper, ghost_lower);
-            free(ghost_upper);
-            free(ghost_lower);
             
         }
-        MPI_Barrier(MPI_COMM_WORLD);
         
 
-        // You can use MPI_Sendrecv or nonblocking MPI_Isend/MPI_Irecv to exchange ghost row cell data.
-        // After exchange, combine the ghost cell info with local cells when computing forces.
-
-        /*
         // --- 3. Calculate Forces ---
         // Call a modified version of calculate_forces that uses local_cells and local_particles.
-        calculate_forces(local_particles, local_cells, &local_n_part, ncside, side, local_total_cells);
-
+        calculate_forces(local_particles, local_cells, local_n_part, ncside, side, start_row, end_row, local_total_cells, ghost_lower, ghost_upper);
+        free(ghost_upper);
+        free(ghost_lower);
+        
         // --- 4. Update Positions and Velocities ---
-        update_positions_and_velocities(local_particles, local_cells, local_n_part, ncside, side, inv_cell_side, local_total_cells);
+        particle_t *ghost_par = malloc(local_n_part * sizeof(particle_t));
+        long ghost_par_count = 0;
+        update_positions_and_velocities(local_particles, ghost_par, local_cells, start_row, end_row, ghost_par_count, local_n_part, ncside, side, inv_cell_side, local_total_cells, rank);
+        free(ghost_par);
+        //print_local_particles(rank, size, local_particles, local_n_part, inv_cell_side);
 
+        // --- 5. Exchange Particles ---
+        exchange_particles(rank, size, local_rows, ncside, truesize, MPI_COMM_WORLD, local_particles, ghost_par, ghost_par_count);
+        /*
         // --- 5. Detect Collisions ---
         // Detect collisions locally (only within cells that the process owns).
         static long long local_collision_count = 0;
@@ -344,6 +343,7 @@ void build_com(particle_t *par, long long n_part, long ncside, double cell_size,
         for (long long j = 0; j < cells[i].count; j++)
         {
             int idx = cells[i].indices[j];
+            if(par[idx].removed) continue;
             cells[i].x += par[idx].x * par[idx].m;
             cells[i].y += par[idx].y * par[idx].m;
             cells[i].m += par[idx].m;
@@ -357,6 +357,217 @@ void build_com(particle_t *par, long long n_part, long ncside, double cell_size,
     }
 }
 
+void calculate_forces(particle_t *par, cell_t *cells, long long n_part, long ncside, double side, int start_row, int end_row,  long total_cells, cell_t *ghost_lower, cell_t *ghost_upper)
+{
+
+    // Reset accelerations
+    for (long long i = 0; i < n_part; i++)
+    {
+        par[i].ax = 0;
+        par[i].ay = 0;
+    }
+
+    // 1. Compute same-cell interactions using each unique pair only once.
+    for (long cell = 0; cell < total_cells; cell++)
+    {
+        cell_t current = cells[cell];
+        for (int a = 0; a < current.count; a++)
+        {
+            int i = current.indices[a];
+            for (int b = a + 1; b < current.count; b++)
+            {      
+                if(par[i].removed || par[current.indices[b]].removed) continue; // Skip removed particles
+                int j = current.indices[b];
+
+                double dx = par[j].x - par[i].x;
+                double dy = par[j].y - par[i].y;
+
+                double dist2 = dx * dx + dy * dy;
+
+                double inv_r = 1.0 / sqrt(dist2);
+                double force = G * ((par[i].m * par[j].m) / dist2);
+                double fx = force * dx * inv_r; // Actual force component in x direction
+                double fy = force * dy * inv_r; // Actual force component in y direction
+
+                par[i].ax += fx / par[i].m;
+                par[i].ay += fy / par[i].m;
+                par[j].ax -= fx / par[j].m;
+                par[j].ay -= fy / par[j].m;
+
+                // Debug print for same-cell interactions
+                /* if(i == 0) {
+                    printf("P%d/P%d mag: %.6f fx: %.6f fy: %.6f\n", i, j, force, fx, fy);
+                } */
+            }
+        }
+    }
+
+    // 2. Compute forces from neighboring cell COMs
+    for (long long i = 0; i < n_part; i++)
+    {
+        if(par[i].removed) continue; // Skip removed particles
+        int x_cell = par[i].x_cell;
+        int y_cell = par[i].y_cell;
+        int offsets[8][2] = {{-1, -1}, {-1, 0}, {-1, 1}, {0, -1}, {0, 1}, {1, -1}, {1, 0}, {1, 1}};
+        for (int k = 0; k < 8; k++)
+        {
+            int dxc = offsets[k][0];
+            int dyc = offsets[k][1];
+
+            // Get neighbor cell with toroidal wrapping
+            int nx = (x_cell + dxc + ncside) % ncside;
+            int ny = ((y_cell - start_row) + dyc + ncside) % ncside;
+            int neighbor_index = ny * ncside + nx;
+            if (cells[neighbor_index].m == 0)
+                continue; // Skip empty cell
+
+            double dx_cm = 0;
+            double dy_cm = 0;
+
+            // Compute raw displacements.
+            if(ny == start_row) {
+                dx_cm = ghost_upper[nx].x - par[i].x;
+                dy_cm = ghost_upper[nx].y - par[i].y;
+            } else if(ny == end_row) {
+                dx_cm = ghost_lower[nx].x - par[i].x;
+                dy_cm = ghost_lower[nx].y - par[i].y;
+            } else {
+                dx_cm = cells[neighbor_index].x - par[i].x;
+                dy_cm = cells[neighbor_index].y - par[i].y;
+            }
+
+            // Compute cell offset differences (normalized to -1, 0, or 1)
+            int diff_x = nx - x_cell;
+            if (diff_x > ncside / 2)
+                diff_x -= ncside;
+            if (diff_x < -ncside / 2)
+                diff_x += ncside;
+
+            int diff_y = ny - y_cell;
+            if (diff_y > ncside / 2)
+                diff_y -= ncside;
+            if (diff_y < -ncside / 2)
+                diff_y += ncside;
+
+            // Adjust displacements based on the cell offset.
+            if (diff_x > 0 && dx_cm < 0)
+            {
+                dx_cm += side;
+            }
+            else if (diff_x < 0 && dx_cm > 0)
+            {
+                dx_cm -= side;
+            }
+
+            if (diff_y > 0 && dy_cm < 0)
+            {
+                dy_cm += side;
+            }
+            else if (diff_y < 0 && dy_cm > 0)
+            {
+                dy_cm -= side;
+            }
+
+            // Compute squared distance, force, etc.
+            double dist2_cm = dx_cm * dx_cm + dy_cm * dy_cm;
+            double inv_r_cm = 1.0 / sqrt(dist2_cm);
+            double force_cm = G * ((par[i].m * cells[neighbor_index].m) / dist2_cm);
+            double fx_cm = force_cm * dx_cm * inv_r_cm;
+            double fy_cm = force_cm * dy_cm * inv_r_cm;
+
+            par[i].ax += fx_cm / par[i].m;
+            par[i].ay += fy_cm / par[i].m;
+
+            /* if(i == 0) {
+                printf("P%d/C%d mag: %.6f fx: %.6f fy: %.6f\n", i, neighbor_index, force_cm, fx_cm, fy_cm);
+            }    */
+        }
+    }
+}
+
+void update_positions_and_velocities(particle_t *par, particle_t *to_remove, cell_t *cells, int start_row, int end_row, int ghost_par_count, long long n_part, long ncside, double side, double inv_cell_size, long total_cells, int rank)
+{
+
+    for (long long i = 0; i < n_part; i++) 
+    {
+        if(par[i].removed) continue; // Skip removed particles
+        // Store previous cell index
+        int prev_x_cell = par[i].x_cell;
+        int prev_y_cell = par[i].y_cell;
+        int prev_cell_index = prev_y_cell * ncside + prev_x_cell;
+        int local_prev_cell_index = (prev_y_cell - start_row) * ncside + prev_x_cell;
+        
+        // Update positions
+        par[i].x += par[i].vx * DELTAT + 0.5 * par[i].ax * DELTAT * DELTAT;
+        par[i].y += par[i].vy * DELTAT + 0.5 * par[i].ay * DELTAT * DELTAT;
+        
+        // Apply toroidal wrapping
+        par[i].x = fmod(par[i].x, side);
+        if (par[i].x < 0)
+            par[i].x += side;
+
+        par[i].y = fmod(par[i].y, side);
+        if (par[i].y < 0)
+            par[i].y += side;
+
+        // Compute new cell
+        int new_x_cell = (int)floor(par[i].x * inv_cell_size);
+        int new_y_cell = (int)floor(par[i].y * inv_cell_size);
+
+        // Clamp to ensure particles don't go out of bounds
+        if (new_x_cell >= ncside)
+            new_x_cell = ncside - 1;
+        if (new_y_cell >= ncside)
+            new_y_cell = ncside - 1;
+
+        // Compute new cell index
+        int new_cell_index = new_y_cell * ncside + new_x_cell;
+        int local_new_cell_index = (new_y_cell - start_row) * ncside + new_x_cell;
+
+        // Remove particle from old cell if it changed and add to new one
+        if (new_cell_index != prev_cell_index)
+        {
+            
+            if(new_y_cell < start_row || new_y_cell > end_row) {
+                to_remove[ghost_par_count] = par[i]; // Store particle for removal
+                ghost_par_count++;
+                par[i].removed = 1; // Mark particle for removal
+            }
+            
+            
+            int *indices = cells[local_prev_cell_index].indices;
+            int count = cells[local_prev_cell_index].count;
+            
+            // Find and remove the particle from the old cell
+            for (int j = 0; j < count; j++)
+            {
+                if (indices[j] == i)
+                {
+                    indices[j] = indices[count - 1]; // Swap with last element
+                    cells[local_prev_cell_index].count--;  // Reduce count
+                    break;
+                }
+            }
+            
+            if(!(par[i].removed == 1)) {
+                // Update particle cell assignment
+                par[i].x_cell = new_x_cell;
+                par[i].y_cell = new_y_cell;
+
+                cells[local_new_cell_index].indices[cells[local_new_cell_index].count++] = i;
+            }
+            
+            
+        }
+
+        // Update velocities
+        if(!(par[i].removed == 1)) {
+            par[i].vx += par[i].ax * DELTAT;
+            par[i].vy += par[i].ay * DELTAT;
+        }
+            
+    }
+}
 
 ///////////////////////////////////////
 // MPI Helper Functions
@@ -387,6 +598,17 @@ void exchange_ghost_cells(int start_row, int end_row, int rank, int size, int lo
     free(recv_upper);
     free(recv_lower);
 
+}
+
+void exchange_particles(int rank, int size, int local_rows, int ncside, int truesize, MPI_Comm comm, particle_t *local_particles, particle_t *ghost_particles, long ghost_par_count) {
+    // Send and receive particles that have moved out of the local domain.
+    // This is a simplified version; you may need to adjust it based on your specific requirements.
+
+    // Send particles to the next process (rank + 1)
+    MPI_Send(local_particles, local_rows * ncside * sizeof(particle_t), MPI_BYTE, (rank + 1) % size, 0, comm);
+
+    // Receive particles from the previous process (rank - 1)
+    MPI_Recv(ghost_particles, local_rows * ncside * sizeof(particle_t), MPI_BYTE, (rank - 1 + size) % size, 0, comm, MPI_STATUS_IGNORE);
 }
 
 // New function: determine local domain bounds for a process.
@@ -427,15 +649,19 @@ void print_local_particles(int rank, int size, particle_t *par, long long n_part
 
     // Each process prints its own particles
     printf("\nProcess %d/%d has %lld particles:\n", rank, size, n_part);
-    printf(" Local ID | Process | x_cell | y_cell\n");
+    printf(" Local ID | Process | x_cell | y_cell | vx | vy | x | y\n");
     printf("---------------------------------------\n");
     
     for (long long i = 0; i < n_part; i++) {
         int x_cell = (int)(par[i].x * inv_cell_side);
         int y_cell = (int)(par[i].y * inv_cell_side);
+        double vx = par[i].vx;
+        double vy = par[i].vy;
+        double x = par[i].x;
+        double y = par[i].y;
 
-        printf("%8lld | %6d | %6d | %6d\n", 
-              i, rank, x_cell, y_cell);
+        printf("%8lld | %6d | %6d | %6d | %f | %f | %f | %F\n", 
+              i, rank, x_cell, y_cell, vx, vy, x, y);
     }
     
     // Add separator after last process

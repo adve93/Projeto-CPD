@@ -33,10 +33,11 @@ void initialize_and_distribute_particles(int rank, int size, long ncside, double
 void exchange_ghost_cells(int start_row, int end_row, int rank, int size,  int total_local_cells, int ncside, int truesize, MPI_Comm comm, cell_t *local_cells, cell_t *ghost_upper, cell_t *ghost_lower);
 void build_com(particle_t *par, long long n_part, long ncside, double cell_size, double inv_cell_size, long total_cells, cell_t *cells);
 void print_cells(cell_t *cells, long ncside, int rank);
+void calculate_forces(particle_t *par, cell_t *cells, long long n_part, long ncside, double side, int start_row, int end_row,  long total_cells, cell_t *ghost_lower, cell_t *ghost_upper);
+void update_positions_and_velocities(particle_t *par, particle_t *to_remove, cell_t *cells, int start_row, int end_row, int ghost_par_count, long long n_part, long ncside, double side, double inv_cell_size, long total_cells, int rank);
+void exchange_particles(int rank, int size, int local_rows, int ncside, int truesize, MPI_Comm comm, particle_t *local_particles, particle_t *ghost_particles);
 
 void free_cell_lists(cell_t *cells, long ncside, long total_cells);
-void calculate_forces(particle_t *par, cell_t *cells, long long *n_part, long ncside, double side, long total_cells);
-void update_positions_and_velocities(particle_t *par, cell_t *cells, long long n_part, long ncside, double side, double inv_cell_size, long total_cells);
 void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n_part, long long *collision_count, long total_cells, long long timestep);
 void run_time_step(particle_t *par, long long *n_part, long ncside, double side, double cell_side, double inv_cell_side, long total_cells, long long *collision_count, long long timestep);
 void print_particles(particle_t *par, long long n_part);
