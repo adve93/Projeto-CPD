@@ -388,6 +388,7 @@ void build_com(particle_t *par, long long n_part, long ncside, double cell_size,
         {
             int idx = cells[i].indices[j];
             if (par[idx].m == 0) continue;
+            if (par[idx].m == 0) continue;
             cells[i].x += par[idx].x * par[idx].m;
             cells[i].y += par[idx].y * par[idx].m;
             cells[i].m += par[idx].m;
@@ -434,6 +435,7 @@ void calculate_forces(particle_t *par, cell_t *cells, long long n_part, long ncs
     int local_rows = end_row - start_row + 1;
     int offsets[8][2] = {{-1, -1}, {-1, 0}, {-1, 1}, {0, -1}, {0, 1}, {1, -1}, {1, 0}, {1, 1}};
     for (long long i = 0; i < n_part; i++) {
+        if (par[i].m == 0) continue;
         if (par[i].m == 0) continue;
         int x_cell = par[i].x_cell;
         int y_cell = par[i].y_cell;
@@ -739,8 +741,8 @@ void exchange_particles(int rank, int size, int local_rows, int ncside, int true
         }
     }
     for (int i = 0; i < total_recv; i++) {
-        new_particles[idx] = recv_buffer[i];
-        new_particles[idx].removed = 0;
+        new_particles[idx++] = recv_buffer[i];
+        new_particles[idx].removed = 0; // Reset removed flag
         idx++;
     }
 
