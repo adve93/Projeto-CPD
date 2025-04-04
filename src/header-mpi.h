@@ -39,7 +39,6 @@ void exchange_particles(int rank, int size, int local_rows, int ncside, int true
 void detect_collisions(cell_t *local_cells, particle_t *local_particles, long ncside, long long *local_n_part, long long *local_collision_count, long local_total_cells, long long t);
 
 void free_cell_lists(cell_t *cells, long ncside, long total_cells);
-void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n_part, long long *collision_count, long total_cells, long long timestep);
 void run_time_step(particle_t *par, long long *n_part, long ncside, double side, double cell_side, double inv_cell_side, long total_cells, long long *collision_count, long long timestep);
 void print_particles(particle_t *par, long long n_part);
 

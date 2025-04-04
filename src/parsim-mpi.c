@@ -312,13 +312,13 @@ int main(int argc, char *argv[])
         detect_collisions(local_cells, local_particles, ncside, &local_n_part, &local_collision_count, local_total_cells, t);
 
         // --- 6. Print Particle Information ---
-        if (local_n_part > 0 && rank == 0) {
-            long long i = 0; // First particle
-            if (!local_particles[i].removed) {
-                printf("Time step %lld, Process %d, Particle %lld: x=%.6f, y=%.6f vx=%.6f, vy=%.6f\n",
-                    t, rank, local_particles[i].global_id, local_particles[i].x, local_particles[i].y, local_particles[i].vx, local_particles[i].vy);
-            }
-        }
+        // if (local_n_part > 0 && rank == 0) {
+        //     long long i = 0; // First particle
+        //     if (!local_particles[i].removed) {
+        //         printf("Time step %lld, Process %d, Particle %lld: x=%.6f, y=%.6f vx=%.6f, vy=%.6f\n",
+        //             t, rank, local_particles[i].global_id, local_particles[i].x, local_particles[i].y, local_particles[i].vx, local_particles[i].vy);
+        //     }
+        // }
 
         MPI_Barrier(MPI_COMM_WORLD); // Synchronize output
     }
@@ -326,10 +326,8 @@ int main(int argc, char *argv[])
     // --- 7. Print Final Particle Position ---
     typedef struct {
         int has_particle0;
-        double x;
-        double y;
+        double x, y;
     } particle0_info_t;
-
     particle0_info_t my_info = {0, 0.0, 0.0};
     for (long long i = 0; i < local_n_part; i++) {
         if (local_particles[i].global_id == 0) {
@@ -339,19 +337,8 @@ int main(int argc, char *argv[])
             break;
         }
     }
-
-    particle0_info_t *all_info = NULL;
-    if (rank == 0) {
-        all_info = malloc(size * sizeof(particle0_info_t));
-        if (!all_info) {
-            fprintf(stderr, "Process %d: Memory allocation failed for all_info.\n", rank);
-            MPI_Abort(MPI_COMM_WORLD, 1);
-        }
-    }
-    MPI_Gather(&my_info, sizeof(particle0_info_t), MPI_BYTE,
-               all_info, sizeof(particle0_info_t), MPI_BYTE,
-               0, MPI_COMM_WORLD);
-
+    particle0_info_t *all_info = (rank == 0) ? malloc(size * sizeof(particle0_info_t)) : NULL;
+    MPI_Gather(&my_info, sizeof(particle0_info_t), MPI_BYTE, all_info, sizeof(particle0_info_t), MPI_BYTE, 0, MPI_COMM_WORLD);
     if (rank == 0) {
         int found = 0;
         for (int i = 0; i < size; i++) {
@@ -361,9 +348,7 @@ int main(int argc, char *argv[])
                 break;
             }
         }
-        if (!found) {
-            printf("Particle 0 was removed during the simulation.\n");
-        }
+        if (!found) printf("Particle 0 was removed.\n");
         free(all_info);
     }
 
@@ -503,68 +488,70 @@ void calculate_forces(particle_t *par, cell_t *cells, long long n_part, long ncs
 void update_positions_and_velocities(particle_t *par, particle_t *to_remove, cell_t *cells, int start_row, int end_row, long *ghost_par_count, long long n_part, long ncside, double side, double inv_cell_size, long total_cells, int rank)
 {
     *ghost_par_count = 0; // Initialize count
+
+    // Phase 1: Update positions and velocities, mark ghost particles
     for (long long i = 0; i < n_part; i++) 
     {
-        if (par[i].m == 0) continue;
-        int prev_x_cell = par[i].x_cell;
-        int prev_y_cell = par[i].y_cell;
-        int prev_cell_index = prev_y_cell * ncside + prev_x_cell;
-        int local_prev_cell_index = (prev_y_cell - start_row) * ncside + prev_x_cell;
-        
+        if (par[i].m == 0) continue; // Skip zero-mass particles
+
+        // Update position
         par[i].x += par[i].vx * DELTAT + 0.5 * par[i].ax * DELTAT * DELTAT;
         par[i].y += par[i].vy * DELTAT + 0.5 * par[i].ay * DELTAT * DELTAT;
-        
+
+        // Apply periodic boundary conditions
         par[i].x = fmod(par[i].x, side);
         if (par[i].x < 0) par[i].x += side;
         par[i].y = fmod(par[i].y, side);
         if (par[i].y < 0) par[i].y += side;
 
+        // Calculate new cell indices
         int new_x_cell = (int)floor(par[i].x * inv_cell_size);
         int new_y_cell = (int)floor(par[i].y * inv_cell_size);
-
         if (new_x_cell >= ncside) new_x_cell = ncside - 1;
         if (new_y_cell >= ncside) new_y_cell = ncside - 1;
 
-        int new_cell_index = new_y_cell * ncside + new_x_cell;
-        int local_new_cell_index = (new_y_cell - start_row) * ncside + new_x_cell;
+        // Mark particles that move out of the local domain
+        if (new_y_cell < start_row || new_y_cell > end_row) {
+            to_remove[*ghost_par_count] = par[i];
+            (*ghost_par_count)++;
+            par[i].removed = 1;
+        } else {
+            // Update particle’s cell indices for the next phase
+            par[i].x_cell = new_x_cell;
+            par[i].y_cell = new_y_cell;
+            par[i].removed = 0; // Ensure it’s not marked as removed
+        }
 
-        if (new_cell_index != prev_cell_index)
-        {
-            if (new_y_cell < start_row || new_y_cell > end_row) {
-                to_remove[*ghost_par_count] = par[i];
-                (*ghost_par_count)++;
-                par[i].removed = 1;
-            }
-            int *indices = cells[local_prev_cell_index].indices;
-            int count = cells[local_prev_cell_index].count;
-            for (int j = 0; j < count; j++)
-            {
-                if (indices[j] == i)
-                {
-                    indices[j] = indices[count - 1];
-                    cells[local_prev_cell_index].count--;
-                    break;
-                }
-            }
-            if (!par[i].removed) {
-                par[i].x_cell = new_x_cell;
-                par[i].y_cell = new_y_cell;
-                if (cells[local_new_cell_index].count == cells[local_new_cell_index].capacity) {
-                    cells[local_new_cell_index].capacity *= 2;
-                    cells[local_new_cell_index].indices = realloc(cells[local_new_cell_index].indices,
-                                                                  cells[local_new_cell_index].capacity * sizeof(int));
-                    if (!cells[local_new_cell_index].indices) {
+        // Update velocity if not removed
+        if (!par[i].removed) {
+            par[i].vx += par[i].ax * DELTAT;
+            par[i].vy += par[i].ay * DELTAT;
+        }
+    }
+
+    // Phase 2: Rebuild cell lists
+    // Clear existing cell counts
+    for (long i = 0; i < total_cells; i++) {
+        cells[i].count = 0;
+    }
+
+    // Reassign particles to cells
+    for (long long i = 0; i < n_part; i++) {
+        if (!par[i].removed && par[i].m > 0) { // Only live, non-ghost particles
+            int local_row = par[i].y_cell - start_row;
+            if (local_row >= 0 && local_row < (end_row - start_row + 1)) {
+                int local_cell_index = local_row * ncside + par[i].x_cell;
+                if (cells[local_cell_index].count == cells[local_cell_index].capacity) {
+                    cells[local_cell_index].capacity *= 2;
+                    cells[local_cell_index].indices = realloc(cells[local_cell_index].indices,
+                                                              cells[local_cell_index].capacity * sizeof(int));
+                    if (!cells[local_cell_index].indices) {
                         fprintf(stderr, "Process %d: Memory reallocation failed.\n", rank);
                         MPI_Abort(MPI_COMM_WORLD, 1);
                     }
                 }
-                cells[local_new_cell_index].indices[cells[local_new_cell_index].count++] = i;
+                cells[local_cell_index].indices[cells[local_cell_index].count++] = i;
             }
-        }
-
-        if (!par[i].removed) {
-            par[i].vx += par[i].ax * DELTAT;
-            par[i].vy += par[i].ay * DELTAT;
         }
     }
 }
