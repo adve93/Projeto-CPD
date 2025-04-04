@@ -319,51 +319,11 @@ int main(int argc, char *argv[])
     // --- 7. Print Final Particle Position ---
     // After the simulation, print particle 0’s position and total collisions
 
-    // Define struct for particle 0 information
-    typedef struct {
-        int has_particle0;
-        double x;
-        double y;
-    } particle0_info_t;
+    for(int i = 0; i < local_n_part; i++) {
+        if(local_particles[i].global_id == 0) {
+            printf("Final position of particle %lld: x=%.6f, y=%.6f\n", local_particles[i].global_id, local_particles[i].x, local_particles[i].y);
+        }
 
-    // Each process checks if it has particle 0
-    particle0_info_t my_info = {0, 0.0, 0.0};
-    for (long long i = 0; i < local_n_part; i++) {
-        if (local_particles[i].global_id == 0) {
-            my_info.has_particle0 = 1;
-            my_info.x = local_particles[i].x;
-            my_info.y = local_particles[i].y;
-            break;
-        }
-    }
-
-    // Gather particle 0 info from all processes to process 0
-    particle0_info_t *all_info = NULL;
-    if (rank == 0) {
-        all_info = malloc(size * sizeof(particle0_info_t));
-        if (!all_info) {
-            fprintf(stderr, "Process %d: Memory allocation failed for all_info.\n", rank);
-            MPI_Abort(MPI_COMM_WORLD, 1);
-        }
-    }
-    MPI_Gather(&my_info, sizeof(particle0_info_t), MPI_BYTE,
-               all_info, sizeof(particle0_info_t), MPI_BYTE,
-               0, MPI_COMM_WORLD);
-
-    // Process 0 prints particle 0’s position
-    if (rank == 0) {
-        int found = 0;
-        for (int i = 0; i < size; i++) {
-            if (all_info[i].has_particle0) {
-                printf("%.3f %.3f\n", all_info[i].x, all_info[i].y);
-                found = 1;
-                break;
-            }
-        }
-        if (!found) {
-            printf("Particle 0 was removed during the simulation.\n");
-        }
-        free(all_info);
     }
 
     // --- 8. Print Total Collisions ---
@@ -401,7 +361,7 @@ void build_com(particle_t *par, long long n_part, long ncside, double cell_size,
         for (long long j = 0; j < cells[i].count; j++)
         {
             int idx = cells[i].indices[j];
-            if (par[idx].removed || par[idx].m == 0) continue;
+            if (par[idx].m == 0) continue;
             cells[i].x += par[idx].x * par[idx].m;
             cells[i].y += par[idx].y * par[idx].m;
             cells[i].m += par[idx].m;
@@ -448,7 +408,7 @@ void calculate_forces(particle_t *par, cell_t *cells, long long n_part, long ncs
     int local_rows = end_row - start_row + 1;
     int offsets[8][2] = {{-1, -1}, {-1, 0}, {-1, 1}, {0, -1}, {0, 1}, {1, -1}, {1, 0}, {1, 1}};
     for (long long i = 0; i < n_part; i++) {
-        if (par[i].removed || par[i].m == 0) continue;
+        if (par[i].m == 0) continue;
         int x_cell = par[i].x_cell;
         int y_cell = par[i].y_cell;
         for (int k = 0; k < 8; k++) {
@@ -504,7 +464,7 @@ void update_positions_and_velocities(particle_t *par, particle_t *to_remove, cel
     *ghost_par_count = 0; // Initialize count
     for (long long i = 0; i < n_part; i++) 
     {
-        if (par[i].removed || par[i].m == 0) continue;
+        if (par[i].m == 0) continue;
         int prev_x_cell = par[i].x_cell;
         int prev_y_cell = par[i].y_cell;
         int prev_cell_index = prev_y_cell * ncside + prev_x_cell;
@@ -548,6 +508,15 @@ void update_positions_and_velocities(particle_t *par, particle_t *to_remove, cel
             if (!par[i].removed) {
                 par[i].x_cell = new_x_cell;
                 par[i].y_cell = new_y_cell;
+                if (cells[local_new_cell_index].count == cells[local_new_cell_index].capacity) {
+                    cells[local_new_cell_index].capacity *= 2;
+                    cells[local_new_cell_index].indices = realloc(cells[local_new_cell_index].indices,
+                                                                  cells[local_new_cell_index].capacity * sizeof(int));
+                    if (!cells[local_new_cell_index].indices) {
+                        fprintf(stderr, "Process %d: Memory reallocation failed.\n", rank);
+                        MPI_Abort(MPI_COMM_WORLD, 1);
+                    }
+                }
                 cells[local_new_cell_index].indices[cells[local_new_cell_index].count++] = i;
             }
         }
@@ -746,6 +715,8 @@ void exchange_particles(int rank, int size, int local_rows, int ncside, int true
     }
     for (int i = 0; i < total_recv; i++) {
         new_particles[idx++] = recv_buffer[i];
+        new_particles[idx].removed = 0; // Reset removed flag
+        idx++;
     }
 
     // 8. Update local_particles and local_n_part
