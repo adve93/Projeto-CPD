@@ -107,8 +107,6 @@ int main(int argc, char *argv[])
     // Each process manages local_rows * ncside cells.
     long local_total_cells = local_rows * ncside;
 
-    //print_process_cell_assignment(rank, size, ncside, side, start_row, end_row);
-
     // Allocate local cells (only for the rows this process owns).
     local_cells = malloc(local_total_cells * sizeof(cell_t));
     if (!local_cells) {
@@ -129,7 +127,6 @@ int main(int argc, char *argv[])
         local_cells[i].m = 0;
     }
 
-
     ////////////////////////////////////////////////////////////
     ////////////Initialize And Distribute Particles/////////////
     ////////////////////////////////////////////////////////////
@@ -149,8 +146,6 @@ int main(int argc, char *argv[])
         init_particles(seed, side, ncside, n_part_total, particles_arr);
 
         // Decide which process will manage which particles.
-        // We assign a particle to the process responsible for the cell its (x,y) falls in.
-        // Will have to reorganize the particle array to match the process's local domain.
         int *send_counts = calloc(size, sizeof(int));
         for (long long i = 0; i < n_part_total; i++) {
             int x_cell = (int)(particles_arr[i].x * inv_cell_side);
@@ -176,7 +171,6 @@ int main(int argc, char *argv[])
         // Allocate buffer for particles for each process.
         particle_t *all_particles = malloc(n_part_total * sizeof(particle_t));
         // Copy particles into the appropriate positions.
-        // We will use a temporary array to hold the counts for each process.
         int *temp_counts = calloc(size, sizeof(int));
         for (long long i = 0; i < n_part_total; i++) {
             int x_cell = (int)(particles_arr[i].x * inv_cell_side);
@@ -193,8 +187,7 @@ int main(int argc, char *argv[])
                 }
             }
         }
-        // Now, send the counts to each process (including self).
-        // First, send local_n_part count to each process.
+        // Send the counts to each process (including self).
         for (int i = 0; i < size; i++) {
             if (i == 0) {
                 local_n_part = send_counts[0];
@@ -212,7 +205,7 @@ int main(int argc, char *argv[])
                 MPI_Send(all_particles + displs[i], send_counts[i] * sizeof(particle_t), MPI_BYTE, i, 1, MPI_COMM_WORLD);
             }
         }
-        for(int i =1; i < size; i++) {
+        for(int i = 1; i < size; i++) {
             MPI_Send(&truesize, 1, MPI_INT, i, 2, MPI_COMM_WORLD);
         }
         free(send_counts);
@@ -222,7 +215,7 @@ int main(int argc, char *argv[])
         free(particles_arr);
     } else {
         // Other processes receive the number of particles and their data.
-        MPI_Recv(&local_n_part, 1, MPI_LONG, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv(&local_n_part, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         local_particles = malloc(local_n_part * sizeof(particle_t));
         if (!local_particles) {
             fprintf(stderr, "Process %d: Memory allocation failed for local_particles.\n", rank);
@@ -235,14 +228,11 @@ int main(int argc, char *argv[])
     for (long long i = 0; i < local_n_part; i++) {
         int x_cell = (int)(local_particles[i].x * inv_cell_side);
         int y_cell = (int)(local_particles[i].y * inv_cell_side);
-        // Only assign particles that belong in this process’s rows. <- Suppostamente ja verificamos isto mas bom failsafe
         if (y_cell >= start_row && y_cell <= end_row) {
-            // Map global cell (x_cell, y_cell) to local index:
             int local_row = y_cell - start_row;
             int local_cell_index = local_row * ncside + x_cell;
             local_particles[i].x_cell = x_cell;
             local_particles[i].y_cell = y_cell;
-            // Make sure there is capacity.
             if (local_cells[local_cell_index].count == local_cells[local_cell_index].capacity) {
                 local_cells[local_cell_index].capacity *= 2;
                 local_cells[local_cell_index].indices = realloc(local_cells[local_cell_index].indices, local_cells[local_cell_index].capacity * sizeof(int));
@@ -254,16 +244,13 @@ int main(int argc, char *argv[])
             local_cells[local_cell_index].indices[local_cells[local_cell_index].count++] = i;
         }
     }
-    //print_local_particles(rank, size, local_particles, local_n_part, inv_cell_side);
 
     ////////////////////////////////////////////////////////////
     /////////////////////Main Routine///////////////////////////
     ////////////////////////////////////////////////////////////
 
-
     static long long local_collision_count = 0;
     for (long long t = 0; t < time_steps; t++) {
-
         MPI_Barrier(MPI_COMM_WORLD);
         if(rank == 0) {
             printf("Time step %lld\n", t);
@@ -280,12 +267,9 @@ int main(int argc, char *argv[])
             ghost_upper = malloc(ncside * sizeof(cell_t));
             ghost_lower = malloc(ncside * sizeof(cell_t));
             exchange_ghost_cells(start_row, end_row, rank, size, local_rows, ncside, truesize, MPI_COMM_WORLD, local_cells, ghost_upper, ghost_lower);
-            
         }
-        
 
         // --- 3. Calculate Forces ---
-        // Call a modified version of calculate_forces that uses local_cells and local_particles.
         calculate_forces(local_particles, local_cells, local_n_part, ncside, side, start_row, end_row, local_total_cells, ghost_lower, ghost_upper);
         free(ghost_upper);
         free(ghost_lower);
@@ -297,22 +281,45 @@ int main(int argc, char *argv[])
         exchange_particles(rank, size, local_rows, ncside, truesize, MPI_COMM_WORLD, &local_particles, ghost_par, ghost_par_count, &local_n_part);
         free(ghost_par);
 
+        // --- 4.5 Rebuild local_cells after exchange ---
+        for (long i = 0; i < local_total_cells; i++) {
+            local_cells[i].count = 0;  // Reset cell counts
+        }
+        for (long long i = 0; i < local_n_part; i++) {
+            if (local_particles[i].m > 0) {  // Only include live particles
+                int x_cell = (int)(local_particles[i].x * inv_cell_side);
+                int y_cell = (int)(local_particles[i].y * inv_cell_side);
+                if (y_cell >= start_row && y_cell <= end_row) {
+                    int local_row = y_cell - start_row;
+                    int local_cell_index = local_row * ncside + x_cell;
+                    local_particles[i].x_cell = x_cell;
+                    local_particles[i].y_cell = y_cell;
+                    if (local_cells[local_cell_index].count == local_cells[local_cell_index].capacity) {
+                        local_cells[local_cell_index].capacity *= 2;
+                        local_cells[local_cell_index].indices = realloc(local_cells[local_cell_index].indices,
+                                                                        local_cells[local_cell_index].capacity * sizeof(int));
+                        if (!local_cells[local_cell_index].indices) {
+                            fprintf(stderr, "Process %d: Memory reallocation failed for cell indices.\n", rank);
+                            MPI_Abort(MPI_COMM_WORLD, 1);
+                        }
+                    }
+                    local_cells[local_cell_index].indices[local_cells[local_cell_index].count++] = i;
+                }
+            }
+        }
+
         // --- 5. Detect Collisions ---
         detect_collisions(local_cells, local_particles, ncside, &local_n_part, &local_collision_count, local_total_cells, t);
 
-        // Optional: Print collision count for debugging
-        // if (local_collision_count > 0 && rank == 0) {
-        //     printf("Process %d detected %lld collisions at time step %lld\n", rank, local_collision_count, t);
-        // }
-
         // --- 6. Print Particle Information ---
-        // if (local_n_part > 0 && rank == 0) {
-        //     long long i = 0; // First particle
-        //     if (!local_particles[i].removed) {
-        //         printf("Time step %lld, Process %d, Particle %lld: x=%.6f, y=%.6f vx=%.6f, vy=%.6f\n",
-        //             t, rank, local_particles[i].global_id, local_particles[i].x, local_particles[i].y, local_particles[i].vx, local_particles[i].vy);
-        //     }
-        // }
+        if (local_n_part > 0 && rank == 0) {
+            long long i = 0; // First particle
+            if (!local_particles[i].removed) {
+                printf("Time step %lld, Process %d, Particle %lld: x=%.6f, y=%.6f vx=%.6f, vy=%.6f\n",
+                    t, rank, local_particles[i].global_id, local_particles[i].x, local_particles[i].y, local_particles[i].vx, local_particles[i].vy);
+            }
+        }
+
         MPI_Barrier(MPI_COMM_WORLD); // Synchronize output
     }
 
@@ -327,7 +334,6 @@ int main(int argc, char *argv[])
     }
 
     // --- 8. Print Total Collisions ---
-    // Sum total collisions across all processes
     long long total_collisions;
     MPI_Reduce(&local_collision_count, &total_collisions, 1, MPI_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
     if (rank == 0) {
@@ -342,6 +348,7 @@ int main(int argc, char *argv[])
     free(local_particles);
 
     MPI_Finalize();
+    return 0;
 }
 
 ///////////////////////////////////////
@@ -361,6 +368,7 @@ void build_com(particle_t *par, long long n_part, long ncside, double cell_size,
         for (long long j = 0; j < cells[i].count; j++)
         {
             int idx = cells[i].indices[j];
+            if (par[idx].m == 0) continue;
             if (par[idx].m == 0) continue;
             cells[i].x += par[idx].x * par[idx].m;
             cells[i].y += par[idx].y * par[idx].m;
@@ -408,6 +416,7 @@ void calculate_forces(particle_t *par, cell_t *cells, long long n_part, long ncs
     int local_rows = end_row - start_row + 1;
     int offsets[8][2] = {{-1, -1}, {-1, 0}, {-1, 1}, {0, -1}, {0, 1}, {1, -1}, {1, 0}, {1, 1}};
     for (long long i = 0; i < n_part; i++) {
+        if (par[i].m == 0) continue;
         if (par[i].m == 0) continue;
         int x_cell = par[i].x_cell;
         int y_cell = par[i].y_cell;
@@ -465,6 +474,7 @@ void update_positions_and_velocities(particle_t *par, particle_t *to_remove, cel
     for (long long i = 0; i < n_part; i++) 
     {
         if (par[i].m == 0) continue;
+        if (par[i].m == 0) continue;
         int prev_x_cell = par[i].x_cell;
         int prev_y_cell = par[i].y_cell;
         int prev_cell_index = prev_y_cell * ncside + prev_x_cell;
@@ -517,6 +527,15 @@ void update_positions_and_velocities(particle_t *par, particle_t *to_remove, cel
                         MPI_Abort(MPI_COMM_WORLD, 1);
                     }
                 }
+                if (cells[local_new_cell_index].count == cells[local_new_cell_index].capacity) {
+                    cells[local_new_cell_index].capacity *= 2;
+                    cells[local_new_cell_index].indices = realloc(cells[local_new_cell_index].indices,
+                                                                  cells[local_new_cell_index].capacity * sizeof(int));
+                    if (!cells[local_new_cell_index].indices) {
+                        fprintf(stderr, "Process %d: Memory reallocation failed.\n", rank);
+                        MPI_Abort(MPI_COMM_WORLD, 1);
+                    }
+                }
                 cells[local_new_cell_index].indices[cells[local_new_cell_index].count++] = i;
             }
         }
@@ -528,44 +547,37 @@ void update_positions_and_velocities(particle_t *par, particle_t *to_remove, cel
     }
 }
 
-void detect_collisions(cell_t *local_cells, particle_t *local_particles, long ncside, long long *local_n_part, long long *local_collision_count, long local_total_cells, long long t) {
-    for (long cell = 0; cell < local_total_cells; cell++) {
-        if (local_cells[cell].count < 2) continue; // Skip cells with fewer than 2 particles
-
-        // Detect collisions and set mass to zero
-        for (int i = 0; i < local_cells[cell].count; i++) {
-            int idx_i = local_cells[cell].indices[i];
-            if (local_particles[idx_i].m == 0) continue; // Skip zero-mass particles
-
+void detect_collisions(cell_t *cells, particle_t *par, long ncside, long long *n_part, long long *collision_count, long total_cells, long long timestep) {
+    
+    for (long cell = 0; cell < total_cells; cell++) {
+        if (cells[cell].count < 2) continue;
+        for (int i = 0; i < cells[cell].count; i++) {
+            int idx_i = cells[cell].indices[i];
+            if (par[idx_i].m == 0) continue;
             int collision_detected = 0;
-            for (int j = i + 1; j < local_cells[cell].count; j++) {
-                int idx_j = local_cells[cell].indices[j];
-                if (local_particles[idx_j].m == 0) continue; // Skip zero-mass particles
-
-                double dx = local_particles[idx_j].x - local_particles[idx_i].x;
-                double dy = local_particles[idx_j].y - local_particles[idx_i].y;
+            for (int j = i + 1; j < cells[cell].count; j++) {
+                int idx_j = cells[cell].indices[j];
+                if (par[idx_j].m == 0) continue;
+                double dx = par[idx_j].x - par[idx_i].x;
+                double dy = par[idx_j].y - par[idx_i].y;
                 double dist2 = dx * dx + dy * dy;
-
                 if (dist2 < EPSILON2) {
-                    local_particles[idx_i].m = 0; // Set mass to zero
-                    local_particles[idx_j].m = 0; // Set mass to zero
+                    par[idx_i].m = 0;
+                    par[idx_j].m = 0;
                     if (!collision_detected) {
-                        (*local_collision_count)++;
+                        (*collision_count)++;
                         collision_detected = 1;
                     }
                 }
             }
         }
-
-        // Compact cell index list to exclude zero-mass particles
         int new_count = 0;
-        for (int i = 0; i < local_cells[cell].count; i++) {
-            int idx = local_cells[cell].indices[i];
-            if (local_particles[idx].m != 0) {
-                local_cells[cell].indices[new_count++] = idx;
-            }
+        for (int i = 0; i < cells[cell].count; i++) {
+            int idx = cells[cell].indices[i];
+            if (par[idx].m != 0)
+                cells[cell].indices[new_count++] = idx;
         }
-        local_cells[cell].count = new_count;
+        cells[cell].count = new_count;
     }
 }
 
@@ -602,7 +614,7 @@ void exchange_ghost_cells(int start_row, int end_row, int rank, int size, int lo
 
 void exchange_particles(int rank, int size, int local_rows, int ncside, int truesize, MPI_Comm comm, particle_t **local_particles, particle_t *ghost_particles, long ghost_par_count, long long *local_n_part)
 {
-    // 1. Calculate send counts for each process
+    // 1. Calculate send counts for each process, only for particles with m > 0
     int *send_counts = calloc(size, sizeof(int));
     if (!send_counts) {
         fprintf(stderr, "Process %d: Memory allocation failed for send_counts.\n", rank);
@@ -610,22 +622,24 @@ void exchange_particles(int rank, int size, int local_rows, int ncside, int true
     }
 
     for (long i = 0; i < ghost_par_count; i++) {
-        int y_cell = ghost_particles[i].y_cell;
-        int dest_rank = -1;
-        for (int p = 0; p < size; p++) {
-            int start, end;
-            get_local_domain(p, size, ncside, &start, &end);
-            if (y_cell >= start && y_cell <= end) {
-                dest_rank = p;
-                break;
+        if (ghost_particles[i].m > 0) {  // Only send live particles
+            int y_cell = ghost_particles[i].y_cell;
+            int dest_rank = -1;
+            for (int p = 0; p < size; p++) {
+                int start, end;
+                get_local_domain(p, size, ncside, &start, &end);
+                if (y_cell >= start && y_cell <= end) {
+                    dest_rank = p;
+                    break;
+                }
             }
-        }
-        if (dest_rank == -1) {
-            fprintf(stderr, "Process %d: No owner found for y_cell %d\n", rank, y_cell);
-            MPI_Abort(MPI_COMM_WORLD, 1);
-        }
-        if (dest_rank != rank) { // Don’t count particles staying local yet
-            send_counts[dest_rank]++;
+            if (dest_rank == -1) {
+                fprintf(stderr, "Process %d: No owner found for y_cell %d\n", rank, y_cell);
+                MPI_Abort(MPI_COMM_WORLD, 1);
+            }
+            if (dest_rank != rank) { // Don’t count particles staying local
+                send_counts[dest_rank]++;
+            }
         }
     }
 
@@ -656,19 +670,21 @@ void exchange_particles(int rank, int size, int local_rows, int ncside, int true
 
     int *temp_counts = calloc(size, sizeof(int));
     for (long i = 0; i < ghost_par_count; i++) {
-        int y_cell = ghost_particles[i].y_cell;
-        int dest_rank = -1;
-        for (int p = 0; p < size; p++) {
-            int start, end;
-            get_local_domain(p, size, ncside, &start, &end);
-            if (y_cell >= start && y_cell <= end) {
-                dest_rank = p;
-                break;
+        if (ghost_particles[i].m > 0) {  // Only send live particles
+            int y_cell = ghost_particles[i].y_cell;
+            int dest_rank = -1;
+            for (int p = 0; p < size; p++) {
+                int start, end;
+                get_local_domain(p, size, ncside, &start, &end);
+                if (y_cell >= start && y_cell <= end) {
+                    dest_rank = p;
+                    break;
+                }
             }
-        }
-        if (dest_rank != rank) {
-            int pos = temp_counts[dest_rank]++;
-            send_buffers[dest_rank][pos] = ghost_particles[i];
+            if (dest_rank != rank) {
+                int pos = temp_counts[dest_rank]++;
+                send_buffers[dest_rank][pos] = ghost_particles[i];
+            }
         }
     }
 
